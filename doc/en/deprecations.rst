@@ -166,6 +166,14 @@ Instead, a separate collector node should be used, which collects the item. See
 .. _example pr fixing inheritance: https://github.com/asmeurer/pytest-flakes/pull/40/files
 
 
+Applying a mark to a fixture function
+-------------------------------------
+
+.. deprecated:: 6.3
+
+Applying a mark to a fixture function is deprecated. Doing so has no effect, and will raise an error in the next version.
+
+
 Backward compatibilities in ``Parser.addoption``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
