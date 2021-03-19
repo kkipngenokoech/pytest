@@ -129,7 +129,7 @@ INSTANCE_COLLECTOR = PytestRemovedIn8Warning(
     "See https://docs.pytest.org/en/latest/deprecations.html#the-pytest-instance-collector",
 )
 
-MARKED_FIXTURE = PytestDeprecationWarning("Marks cannot be applied to fixtures")
+MARKED_FIXTURE = PytestDeprecationWarning("Marks applied to fixtures have no effect")
 
 # You want to make some `__init__` or function "private".
 #
