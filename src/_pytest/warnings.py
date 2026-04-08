@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextlib import ExitStack
+import os
 import sys
 from typing import Literal
 import warnings
@@ -16,6 +17,38 @@ from _pytest.nodes import Item
 from _pytest.terminal import TerminalReporter
 from _pytest.tracemalloc import tracemalloc_message
 import pytest
+
+
+def _safe_apply_warning_filters(config_filters, cmdline_filters):
+    """Apply warning filters with better error handling for import issues."""
+    try:
+        apply_warning_filters(config_filters, cmdline_filters)
+    except ImportError as e:
+        # Check if this is likely a module that exists locally but isn't in sys.path
+        error_msg = str(e)
+        if "No module named" in error_msg:
+            # Extract module name from error message
+            module_name = error_msg.split("'")[1] if "'" in error_msg else "unknown"
+            
+            # Check if a .py file with this name exists in current directory
+            current_dir = os.getcwd()
+            potential_file = os.path.join(current_dir, f"{module_name}.py")
+            
+            if os.path.exists(potential_file):
+                raise ImportError(
+                    f"Failed to import module '{module_name}' for filterwarnings. "
+                    f"The module exists as '{potential_file}' but is not in Python's module search path. "
+                    f"This commonly happens when using filterwarnings with local modules before pytest "
+                    f"adds the project root to sys.path. Consider using message-based filters instead, "
+                    f"or ensure the module is properly installed or in PYTHONPATH."
+                ) from e
+            else:
+                raise ImportError(
+                    f"Failed to import module '{module_name}' for filterwarnings. "
+                    f"Make sure the module is installed or in Python's module search path."
+                ) from e
+        else:
+            raise
 
 
 @contextmanager
@@ -44,7 +77,7 @@ def catch_warnings_for_item(
         # To be enabled in pytest 10.0.0.
         # warnings.filterwarnings("error", category=pytest.PytestRemovedIn10Warning)
 
-        apply_warning_filters(config_filters, cmdline_filters)
+        _safe_apply_warning_filters(config_filters, cmdline_filters)
 
         # apply filters from "filterwarnings" marks
         nodeid = "" if item is None else item.nodeid
