@@ -524,6 +524,18 @@ def import_path(
     if mode is ImportMode.importlib:
         module_name = module_name_from_path(path, root)
 
+        # Check if module is already loaded to prevent duplicate imports
+        if module_name in sys.modules:
+            existing_mod = sys.modules[module_name]
+            # Verify the existing module corresponds to the same file
+            if hasattr(existing_mod, '__file__') and existing_mod.__file__:
+                try:
+                    if _is_same(str(path), existing_mod.__file__):
+                        return existing_mod
+                except (FileNotFoundError, OSError):
+                    # If we can't verify, continue with normal import process
+                    pass
+
         for meta_importer in sys.meta_path:
             spec = meta_importer.find_spec(module_name, [str(path.parent)])
             if spec is not None:
@@ -533,6 +545,17 @@ def import_path(
 
         if spec is None:
             raise ImportError(f"Can't find module {module_name} at location {path}")
+        
+        # Check again after spec creation in case another thread imported it
+        if module_name in sys.modules:
+            existing_mod = sys.modules[module_name]
+            if hasattr(existing_mod, '__file__') and existing_mod.__file__:
+                try:
+                    if _is_same(str(path), existing_mod.__file__):
+                        return existing_mod
+                except (FileNotFoundError, OSError):
+                    pass
+        
         mod = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = mod
         spec.loader.exec_module(mod)  # type: ignore[union-attr]
