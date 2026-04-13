@@ -661,6 +661,7 @@ class AssertionRewriter(ast.NodeVisitor):
         super(AssertionRewriter, self).__init__()
         self.module_path = module_path
         self.config = config
+        self._unroll_counter = itertools.count()
 
     def run(self, mod):
         """Find all assert statements in *mod* and rewrite them."""
@@ -877,6 +878,154 @@ class AssertionRewriter(ast.NodeVisitor):
         for stmt in self.statements:
             set_location(stmt, assert_.lineno, assert_.col_offset)
         return self.statements
+
+    def _is_all_any_call(self, node):
+        """Check if node is a call to all() or any() builtin functions."""
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ("all", "any")
+            and len(node.args) == 1
+        )
+
+    def _rewrite_all_any_assert(self, assert_):
+        """Rewrite assert all(...) or assert any(...) to provide better error messages."""
+        call = assert_.test
+        func_name = call.func.id
+        iterable = call.args[0]
+        
+        # Generate unique variable names
+        counter_suffix = str(next(self._unroll_counter))
+        iter_var = "@py_iter" + counter_suffix
+        item_var = "@py_item" + counter_suffix
+        result_var = "@py_result" + counter_suffix
+        
+        statements = []
+        
+        # Create iterator variable: @py_iter = iter(iterable)
+        statements.append(
+            ast.Assign(
+                [ast.Name(iter_var, ast.Store())],
+                ast_Call(
+                    self.builtin("iter"),
+                    [iterable],
+                    []
+                )
+            )
+        )
+        
+        if func_name == "all":
+            # For all(): assume True, fail on first False
+            statements.append(
+                ast.Assign(
+                    [ast.Name(result_var, ast.Store())],
+                    ast.NameConstant(True)
+                )
+            )
+            
+            # Create for loop
+            loop_body = []
+            
+            # Create assertion rewriter for the item condition
+            self.statements = []
+            self.variables = []
+            self.variable_counter = itertools.count()
+            
+            # Visit the item to get explanation
+            item_node = ast.Name(item_var, ast.Load())
+            self.generic_visit(item_node)
+            
+            # Create the condition check and failure
+            condition = ast.UnaryOp(ast.Not(), ast.Name(item_var, ast.Load()))
+            
+            # Reset for condition explanation
+            self.statements = []
+            self.variables = []
+            self.variable_counter = itertools.count()
+            self.generic_visit(condition)
+            
+            failure_msg = self.pop_format_context(
+                ast.Str("assert all failed, first false item: " + self.explanation)
+            )
+            
+            loop_body.extend([
+                ast.If(
+                    condition,
+                    [
+                        ast.Assign(
+                            [ast.Name(result_var, ast.Store())],
+                            ast.NameConstant(False)
+                        ),
+                        ast.Raise(self.builtin("AssertionError"), failure_msg, None)
+                    ],
+                    []
+                )
+            ])
+            
+        else:  # func_name == "any"
+            # For any(): assume False, succeed on first True
+            statements.append(
+                ast.Assign(
+                    [ast.Name(result_var, ast.Store())],
+                    ast.NameConstant(False)
+                )
+            )
+            
+            # Create for loop
+            loop_body = []
+            
+            # Create assertion rewriter for the item condition
+            self.statements = []
+            self.variables = []
+            self.variable_counter = itertools.count()
+            
+            # Visit the item to get explanation
+            item_node = ast.Name(item_var, ast.Load())
+            self.generic_visit(item_node)
+            
+            # Create the condition check and success
+            condition = ast.Name(item_var, ast.Load())
+            
+            loop_body.extend([
+                ast.If(
+                    condition,
+                    [
+                        ast.Assign(
+                            [ast.Name(result_var, ast.Store())],
+                            ast.NameConstant(True)
+                        ),
+                        ast.Return(None)
+                    ],
+                    []
+                )
+            ])
+        
+        # Add the for loop
+        statements.append(
+            ast.For(
+                ast.Name(item_var, ast.Store()),
+                ast.Name(iter_var, ast.Load()),
+                loop_body,
+                []
+            )
+        )
+        
+        # For any(), if we get here, nothing was True
+        if func_name == "any":
+            self.statements = []
+            self.variables = []
+            self.variable_counter = itertools.count()
+            
+            # Create explanation for the failure
+            failure_msg = self.pop_format_context(
+                ast.Str("assert any failed, no true items found")
+            )
+            
+            statements.append(
+                ast.Raise(self.builtin("AssertionError"), failure_msg, None)
+            )
+        
+        return statements
 
     def warn_about_none_ast(self, node, module_path, lineno):
         """
