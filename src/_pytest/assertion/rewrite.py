@@ -458,6 +458,11 @@ def _should_repr_global_name(obj: object) -> bool:
         return True
 
 
+def _is_string_literal(node: ast.AST) -> bool:
+    """Check if an AST node represents a string literal."""
+    return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+
 def _format_boolop(explanations: Iterable[str], is_or: bool) -> str:
     explanation = "(" + (is_or and " or " or " and ").join(explanations) + ")"
     return explanation.replace("%", "%%")
@@ -743,6 +748,9 @@ class AssertionRewriter(ast.NodeVisitor):
 
     @staticmethod
     def is_rewrite_disabled(docstring: str) -> bool:
+        # Only check string docstrings, not other types
+        if not isinstance(docstring, str):
+            return False
         return "PYTEST_DONT_REWRITE" in docstring
 
     def variable(self) -> str:
