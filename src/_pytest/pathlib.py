@@ -524,6 +524,18 @@ def import_path(
     if mode is ImportMode.importlib:
         module_name = module_name_from_path(path, root)
 
+        # Check if module is already imported and return existing instance
+        if module_name in sys.modules:
+            existing_mod = sys.modules[module_name]
+            # Verify the existing module corresponds to the same file
+            if hasattr(existing_mod, '__file__') and existing_mod.__file__:
+                try:
+                    if _is_same(str(path), existing_mod.__file__):
+                        return existing_mod
+                except (FileNotFoundError, OSError):
+                    # If we can't verify, continue with import
+                    pass
+
         for meta_importer in sys.meta_path:
             spec = meta_importer.find_spec(module_name, [str(path.parent)])
             if spec is not None:
