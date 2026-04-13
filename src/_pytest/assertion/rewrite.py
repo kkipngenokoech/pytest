@@ -250,8 +250,12 @@ class AssertionRewritingHook(importlib.abc.MetaPathFinder, importlib.abc.Loader)
         )
         for name in already_imported:
             mod = sys.modules[name]
+            # Ensure mod.__doc__ is a string before passing to is_rewrite_disabled
+            doc = mod.__doc__
+            if not isinstance(doc, str):
+                doc = ""
             if not AssertionRewriter.is_rewrite_disabled(
-                mod.__doc__ or ""
+                doc
             ) and not isinstance(mod.__loader__, type(self)):
                 self._warn_already_imported(name)
         self._must_rewrite.update(names)
