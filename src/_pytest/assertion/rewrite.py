@@ -730,6 +730,238 @@ class AssertionRewriter(ast.NodeVisitor):
     @staticmethod
     def is_rewrite_disabled(docstring):
         return "PYTEST_DONT_REWRITE" in docstring
+    
+    def _try_unroll_all_any(self, assert_):
+        """Try to unroll all() or any() calls in assert statements.
+        
+        Returns a list of AST statements if unrolling was successful,
+        None otherwise.
+        """
+        test = assert_.test
+        
+        # Check if this is a direct call to all() or any()
+        if isinstance(test, ast.Call) and isinstance(test.func, ast.Name):
+            if test.func.id == 'all' and len(test.args) == 1:
+                return self._unroll_all_call(assert_, test.args[0])
+            elif test.func.id == 'any' and len(test.args) == 1:
+                return self._unroll_any_call(assert_, test.args[0])
+        
+        # Check for negated any() which is equivalent to not all()
+        if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+            if isinstance(test.operand, ast.Call) and isinstance(test.operand.func, ast.Name):
+                if test.operand.func.id == 'any' and len(test.operand.args) == 1:
+                    return self._unroll_not_any_call(assert_, test.operand.args[0])
+        
+        return None
+    
+    def _unroll_all_call(self, assert_, iterable):
+        """Unroll assert all(iterable) into a for loop."""
+        # Generate unique variable names
+        item_var = self._get_unique_name('item')
+        
+        # Create the for loop body that will run the assertion rewriter on each item
+        # We need to create a temporary assertion for each item to get proper error reporting
+        loop_body = []
+        
+        # Create assert item statement
+        item_assert = ast.Assert(
+            test=ast.Name(item_var, ast.Load()),
+            msg=assert_.msg
+        )
+        
+        # Rewrite the item assertion to get detailed error reporting
+        self.statements = []
+        self.variables = []
+        self.variable_counter = itertools.count()
+        self.stack = []
+        self.on_failure = []
+        self.push_format_context()
+        
+        # Visit the item to get proper error reporting
+        top_condition, explanation = self.visit(ast.Name(item_var, ast.Load()))
+        
+        # Create failure message for the item
+        body = self.on_failure
+        negation = ast.UnaryOp(ast.Not(), top_condition)
+        
+        if assert_.msg:
+            assertmsg = self.helper("_format_assertmsg", assert_.msg)
+            explanation = "\n>assert " + explanation
+        else:
+            assertmsg = ast.Str("")
+            explanation = "assert " + explanation
+            
+        template = ast.BinOp(assertmsg, ast.Add(), ast.Str(explanation))
+        msg = self.pop_format_context(template)
+        fmt = self.helper("_format_explanation", msg)
+        err_name = ast.Name("AssertionError", ast.Load())
+        exc = ast_Call(err_name, [fmt], [])
+        raise_ = ast.Raise(exc, None)
+        body.append(raise_)
+        
+        # Create the if statement for the loop body
+        if_stmt = ast.If(negation, body, [])
+        loop_body.append(if_stmt)
+        
+        # Create the for loop
+        for_loop = ast.For(
+            target=ast.Name(item_var, ast.Store()),
+            iter=iterable,
+            body=loop_body,
+            orelse=[]
+        )
+        
+        # Set line numbers
+        set_location(for_loop, assert_.lineno, assert_.col_offset)
+        set_location(if_stmt, assert_.lineno, assert_.col_offset)
+        
+        return [for_loop]
+    
+    def _unroll_any_call(self, assert_, iterable):
+        """Unroll assert any(iterable) into a for loop with early return."""
+        # Generate unique variable names
+        item_var = self._get_unique_name('item')
+        found_var = self._get_unique_name('found')
+        
+        # Initialize found variable to False
+        found_init = ast.Assign(
+            targets=[ast.Name(found_var, ast.Store())],
+            value=_NameConstant(False)
+        )
+        
+        # Create the for loop body
+        loop_body = []
+        
+        # If item is truthy, set found to True and break
+        if_true = ast.If(
+            test=ast.Name(item_var, ast.Load()),
+            body=[
+                ast.Assign(
+                    targets=[ast.Name(found_var, ast.Store())],
+                    value=_NameConstant(True)
+                ),
+                ast.Break()
+            ],
+            orelse=[]
+        )
+        loop_body.append(if_true)
+        
+        # Create the for loop
+        for_loop = ast.For(
+            target=ast.Name(item_var, ast.Store()),
+            iter=iterable,
+            body=loop_body,
+            orelse=[]
+        )
+        
+        # Create assertion on found variable
+        found_assert = ast.Assert(
+            test=ast.Name(found_var, ast.Load()),
+            msg=assert_.msg
+        )
+        
+        # Set line numbers
+        set_location(found_init, assert_.lineno, assert_.col_offset)
+        set_location(for_loop, assert_.lineno, assert_.col_offset)
+        set_location(found_assert, assert_.lineno, assert_.col_offset)
+        
+        # Rewrite the found assertion to get proper error reporting
+        self.statements = []
+        self.variables = []
+        self.variable_counter = itertools.count()
+        self.stack = []
+        self.on_failure = []
+        self.push_format_context()
+        
+        top_condition, explanation = self.visit(ast.Name(found_var, ast.Load()))
+        
+        body = self.on_failure
+        negation = ast.UnaryOp(ast.Not(), top_condition)
+        
+        if assert_.msg:
+            assertmsg = self.helper("_format_assertmsg", assert_.msg)
+            explanation = "\n>assert " + explanation
+        else:
+            assertmsg = ast.Str("")
+            explanation = "assert " + explanation
+            
+        template = ast.BinOp(assertmsg, ast.Add(), ast.Str(explanation))
+        msg = self.pop_format_context(template)
+        fmt = self.helper("_format_explanation", msg)
+        err_name = ast.Name("AssertionError", ast.Load())
+        exc = ast_Call(err_name, [fmt], [])
+        raise_ = ast.Raise(exc, None)
+        body.append(raise_)
+        
+        final_check = ast.If(negation, body, [])
+        set_location(final_check, assert_.lineno, assert_.col_offset)
+        
+        return [found_init, for_loop, final_check]
+    
+    def _unroll_not_any_call(self, assert_, iterable):
+        """Unroll assert not any(iterable) which is equivalent to assert all(not item for item in iterable)."""
+        # This is equivalent to checking that all items are falsy
+        item_var = self._get_unique_name('item')
+        
+        # Create the for loop body that checks each item is falsy
+        loop_body = []
+        
+        # Create assert not item statement
+        negated_item = ast.UnaryOp(ast.Not(), ast.Name(item_var, ast.Load()))
+        item_assert = ast.Assert(
+            test=negated_item,
+            msg=assert_.msg
+        )
+        
+        # Rewrite the negated item assertion
+        self.statements = []
+        self.variables = []
+        self.variable_counter = itertools.count()
+        self.stack = []
+        self.on_failure = []
+        self.push_format_context()
+        
+        top_condition, explanation = self.visit(negated_item)
+        
+        body = self.on_failure
+        negation = ast.UnaryOp(ast.Not(), top_condition)
+        
+        if assert_.msg:
+            assertmsg = self.helper("_format_assertmsg", assert_.msg)
+            explanation = "\n>assert " + explanation
+        else:
+            assertmsg = ast.Str("")
+            explanation = "assert " + explanation
+            
+        template = ast.BinOp(assertmsg, ast.Add(), ast.Str(explanation))
+        msg = self.pop_format_context(template)
+        fmt = self.helper("_format_explanation", msg)
+        err_name = ast.Name("AssertionError", ast.Load())
+        exc = ast_Call(err_name, [fmt], [])
+        raise_ = ast.Raise(exc, None)
+        body.append(raise_)
+        
+        if_stmt = ast.If(negation, body, [])
+        loop_body.append(if_stmt)
+        
+        # Create the for loop
+        for_loop = ast.For(
+            target=ast.Name(item_var, ast.Store()),
+            iter=iterable,
+            body=loop_body,
+            orelse=[]
+        )
+        
+        set_location(for_loop, assert_.lineno, assert_.col_offset)
+        set_location(if_stmt, assert_.lineno, assert_.col_offset)
+        
+        return [for_loop]
+    
+    def _get_unique_name(self, base):
+        """Generate a unique variable name based on the base name."""
+        counter = getattr(self, '_name_counter', 0)
+        self._name_counter = counter + 1
+        return "@py_{}_{}".format(base, counter)
 
     def variable(self):
         """Get a new variable."""
