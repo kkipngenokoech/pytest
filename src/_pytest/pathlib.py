@@ -523,6 +523,26 @@ def import_path(
 
     if mode is ImportMode.importlib:
         module_name = module_name_from_path(path, root)
+        
+        # Normalize the path to ensure consistent comparison
+        normalized_path = str(path.resolve())
+        
+        # Check if a module with the same file path is already loaded
+        for existing_name, existing_module in sys.modules.items():
+            if hasattr(existing_module, '__file__') and existing_module.__file__:
+                try:
+                    existing_file = existing_module.__file__
+                    if existing_file.endswith(('.pyc', '.pyo')):
+                        existing_file = existing_file[:-1]
+                    if _is_same(normalized_path, existing_file):
+                        # Module already loaded, ensure it's also available under the new name
+                        if module_name not in sys.modules:
+                            sys.modules[module_name] = existing_module
+                        insert_missing_modules(sys.modules, module_name)
+                        return existing_module
+                except (OSError, TypeError):
+                    # Skip if we can't compare paths (e.g., built-in modules)
+                    continue
 
         for meta_importer in sys.meta_path:
             spec = meta_importer.find_spec(module_name, [str(path.parent)])
