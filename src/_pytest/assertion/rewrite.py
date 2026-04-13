@@ -743,6 +743,8 @@ class AssertionRewriter(ast.NodeVisitor):
 
     @staticmethod
     def is_rewrite_disabled(docstring: str) -> bool:
+        if not isinstance(docstring, str):
+            return False
         return "PYTEST_DONT_REWRITE" in docstring
 
     def variable(self) -> str:
