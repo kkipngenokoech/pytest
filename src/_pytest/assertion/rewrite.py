@@ -250,8 +250,9 @@ class AssertionRewritingHook(importlib.abc.MetaPathFinder, importlib.abc.Loader)
         )
         for name in already_imported:
             mod = sys.modules[name]
-            if not AssertionRewriter.is_rewrite_disabled(
-                mod.__doc__ or ""
+            if (
+                mod.__doc__ is None
+                or "PYTEST_DONT_REWRITE" not in mod.__doc__
             ) and not isinstance(mod.__loader__, type(self)):
                 self._warn_already_imported(name)
         self._must_rewrite.update(names)
@@ -742,8 +743,15 @@ class AssertionRewriter(ast.NodeVisitor):
                     nodes.append(field)
 
     @staticmethod
-    def is_rewrite_disabled(docstring: str) -> bool:
-        return "PYTEST_DONT_REWRITE" in docstring
+    def is_rewrite_disabled(node: ast.stmt) -> bool:
+        """Check if rewriting is disabled by a docstring."""
+        if not isinstance(node, ast.Expr):
+            return False
+        if not isinstance(node.value, ast.Constant):
+            return False
+        if not isinstance(node.value.value, str):
+            return False
+        return "PYTEST_DONT_REWRITE" in node.value.value
 
     def variable(self) -> str:
         """Get a new variable."""
