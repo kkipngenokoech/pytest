@@ -534,6 +534,89 @@ def _format_boolop(explanations, is_or):
         return explanation.replace(b"%", b"%%")
 
 
+def _is_all_or_any_call(node):
+    """Check if node is a call to all() or any()."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("all", "any")
+        and len(node.args) == 1
+    )
+
+
+def _unroll_all_any(node, source):
+    """Transform all(iterable) or any(iterable) into an unrolled for loop.
+    
+    all(iterable) becomes:
+    for __pytest_all_item in iterable:
+        if not __pytest_all_item:
+            break
+    else:
+        __pytest_all_result = True
+    
+    any(iterable) becomes:
+    for __pytest_any_item in iterable:
+        if __pytest_any_item:
+            __pytest_any_result = True
+            break
+    else:
+        __pytest_any_result = False
+    """
+    func_name = node.func.id
+    iterable = node.args[0]
+    
+    # Generate unique variable names
+    item_var = "__pytest_{}_item".format(func_name)
+    result_var = "__pytest_{}_result".format(func_name)
+    
+    # Create the for loop variable
+    target = ast.Name(id=item_var, ctx=ast.Store())
+    
+    if func_name == "all":
+        # For all(): if not item, break
+        test = ast.UnaryOp(op=ast.Not(), operand=ast.Name(id=item_var, ctx=ast.Load()))
+        if_body = [ast.Break()]
+        else_body = [ast.Assign(
+            targets=[ast.Name(id=result_var, ctx=ast.Store())],
+            value=ast.NameConstant(value=True)
+        )]
+        default_result = ast.NameConstant(value=False)
+    else:  # any
+        # For any(): if item, set result and break
+        test = ast.Name(id=item_var, ctx=ast.Load())
+        if_body = [
+            ast.Assign(
+                targets=[ast.Name(id=result_var, ctx=ast.Store())],
+                value=ast.NameConstant(value=True)
+            ),
+            ast.Break()
+        ]
+        else_body = [ast.Assign(
+            targets=[ast.Name(id=result_var, ctx=ast.Store())],
+            value=ast.NameConstant(value=False)
+        )]
+        default_result = ast.NameConstant(value=False)
+    
+    # Create the if statement inside the loop
+    if_stmt = ast.If(test=test, body=if_body, orelse=[])
+    
+    # Create the for loop
+    for_loop = ast.For(
+        target=target,
+        iter=iterable,
+        body=[if_stmt],
+        orelse=else_body
+    )
+    
+    # Initialize result variable to default
+    init_result = ast.Assign(
+        targets=[ast.Name(id=result_var, ctx=ast.Store())],
+        value=default_result
+    )
+    
+    return [init_result, for_loop], result_var
+
+
 def _call_reprcompare(ops, results, expls, each_obj):
     for i, res, expl in zip(range(len(ops)), results, expls):
         try:
