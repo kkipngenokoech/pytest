@@ -20,6 +20,22 @@ from typing import Optional
 from typing import Set
 from typing import Tuple
 
+
+def _safe_repr(obj):
+    """Return a safe string representation of an object.
+    
+    If the object's __repr__ method raises an exception, return a fallback
+    representation instead of propagating the exception.
+    """
+    try:
+        return repr(obj)
+    except Exception as exc:
+        return "<{} (repr() failed: {}: {})>".format(
+            obj.__class__.__name__,
+            exc.__class__.__name__,
+            str(exc)
+        )
+
 import attr
 import pluggy
 import py
@@ -404,7 +420,11 @@ class TerminalReporter:
             self._set_main_color()
 
     def pytest_internalerror(self, excrepr):
-        for line in str(excrepr).split("\n"):
+        try:
+            excrepr_str = str(excrepr)
+        except Exception:
+            excrepr_str = _safe_repr(excrepr)
+        for line in excrepr_str.split("\n"):
             self.write_line("INTERNALERROR> " + line)
         return 1
 
