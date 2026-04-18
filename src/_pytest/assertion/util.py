@@ -127,6 +127,8 @@ def assertrepr_compare(config, op, left, right):
         if op == "==":
             if istext(left) and istext(right):
                 explanation = _diff_text(left, right, verbose)
+            elif isinstance(left, bytes) and isinstance(right, bytes):
+                explanation = _diff_text(left, right, verbose)
             else:
                 if issequence(left) and issequence(right):
                     explanation = _compare_eq_sequence(left, right, verbose)
@@ -178,13 +180,22 @@ def _diff_text(left, right, verbose=0):
     def escape_for_readable_diff(binary_text):
         """
         Ensures that the internal string is always valid unicode, converting any bytes safely to valid unicode.
-        This is done using repr() which then needs post-processing to fix the encompassing quotes and un-escape
-        newlines and carriage returns (#429).
+        For bytes objects, we format them in a more readable way to avoid confusing ASCII ordinals.
         """
-        r = str(repr(binary_text)[1:-1])
-        r = r.replace(r"\n", "\n")
-        r = r.replace(r"\r", "\r")
-        return r
+        if isinstance(binary_text, bytes):
+            # Format bytes in a clearer way: show as hex for non-printable, as chars for printable ASCII
+            result = []
+            for byte_val in binary_text:
+                if 32 <= byte_val <= 126:  # printable ASCII range
+                    result.append(chr(byte_val))
+                else:
+                    result.append(f"\\x{byte_val:02x}")
+            return ''.join(result)
+        else:
+            r = str(repr(binary_text)[1:-1])
+            r = r.replace(r"\n", "\n")
+            r = r.replace(r"\r", "\r")
+            return r
 
     if isinstance(left, bytes):
         left = escape_for_readable_diff(left)
