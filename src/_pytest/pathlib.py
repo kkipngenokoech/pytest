@@ -483,6 +483,36 @@ class ImportPathMismatchError(ImportError):
     """
 
 
+def _find_existing_module_by_file(file_path: str) -> Optional[ModuleType]:
+    """Find an existing module in sys.modules that corresponds to the given file path.
+    
+    This helps prevent duplicate module imports when the same file is imported
+    through different module names or paths.
+    """
+    resolved_path = str(Path(file_path).resolve())
+    
+    for module_name, module in sys.modules.items():
+        if module is None:
+            continue
+        
+        module_file = getattr(module, '__file__', None)
+        if module_file is None:
+            continue
+            
+        # Handle .pyc/.pyo files
+        if module_file.endswith(('.pyc', '.pyo')):
+            module_file = module_file[:-1]
+            
+        try:
+            if _is_same(resolved_path, module_file):
+                return module
+        except (OSError, ValueError):
+            # File comparison failed, continue searching
+            continue
+            
+    return None
+
+
 def import_path(
     p: Union[str, "os.PathLike[str]"],
     *,
@@ -522,7 +552,20 @@ def import_path(
         raise ImportError(path)
 
     if mode is ImportMode.importlib:
+        # Check if a module with the same file path already exists
+        existing_module = _find_existing_module_by_file(str(path))
+        if existing_module is not None:
+            return existing_module
+            
         module_name = module_name_from_path(path, root)
+        
+        # Check if module is already loaded with this name
+        if module_name in sys.modules:
+            existing_mod = sys.modules[module_name]
+            if existing_mod is not None:
+                existing_file = getattr(existing_mod, '__file__', None)
+                if existing_file and _is_same(str(path), existing_file):
+                    return existing_mod
 
         for meta_importer in sys.meta_path:
             spec = meta_importer.find_spec(module_name, [str(path.parent)])
