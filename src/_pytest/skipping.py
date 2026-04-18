@@ -255,6 +255,12 @@ def pytest_runtest_call(item: Item) -> Generator[None, None, None]:
             xfail("[NOTRUN] " + xfailed.reason)
 
     yield
+    
+    # Re-evaluate xfail marks after test execution in case markers were added dynamically
+    if not item.config.option.runxfail:
+        new_xfailed = evaluate_xfail_marks(item)
+        if new_xfailed is not None and (xfailed is None or new_xfailed != xfailed):
+            item._store[xfailed_key] = new_xfailed
 
 
 @hookimpl(hookwrapper=True)
