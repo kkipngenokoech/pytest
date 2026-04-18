@@ -361,11 +361,9 @@ class Node(metaclass=NodeMeta):
         else:
             truncate_locals = True
 
-        try:
-            os.getcwd()
-            abspath = False
-        except OSError:
-            abspath = True
+        # Always use relative paths to maintain consistency with the original working directory
+        # This prevents issues when fixtures change the working directory
+        abspath = False
 
         return excinfo.getrepr(
             funcargs=True,
