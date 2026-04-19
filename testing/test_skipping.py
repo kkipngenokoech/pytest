@@ -1,7 +1,3 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import sys
 
 import pytest
@@ -10,7 +6,7 @@ from _pytest.skipping import MarkEvaluator
 from _pytest.skipping import pytest_runtest_setup
 
 
-class TestEvaluator(object):
+class TestEvaluator:
     def test_no_marker(self, testdir):
         item = testdir.getitem("def test_func(): pass")
         evalskipif = MarkEvaluator(item, "skipif")
@@ -38,22 +34,6 @@ class TestEvaluator(object):
             """
             import pytest
             @pytest.mark.xyz("hasattr(os, 'sep')")
-            def test_func():
-                pass
-        """
-        )
-        ev = MarkEvaluator(item, "xyz")
-        assert ev
-        assert ev.istrue()
-        expl = ev.getexplanation()
-        assert expl == "condition: hasattr(os, 'sep')"
-
-    @pytest.mark.skipif("sys.version_info[0] >= 3")
-    def test_marked_one_arg_unicode(self, testdir):
-        item = testdir.getitem(
-            """
-            import pytest
-            @pytest.mark.xyz(u"hasattr(os, 'sep')")
             def test_func():
                 pass
         """
@@ -151,7 +131,7 @@ class TestEvaluator(object):
         assert expl == "condition: config._hackxyz"
 
 
-class TestXFail(object):
+class TestXFail:
     @pytest.mark.parametrize("strict", [True, False])
     def test_xfail_simple(self, testdir, strict):
         item = testdir.getitem(
@@ -518,7 +498,7 @@ class TestXFail(object):
         assert result.ret == (1 if strict else 0)
 
 
-class TestXFailwithSetupTeardown(object):
+class TestXFailwithSetupTeardown:
     def test_failing_setup_issue9(self, testdir):
         testdir.makepyfile(
             """
@@ -550,7 +530,7 @@ class TestXFailwithSetupTeardown(object):
         result.stdout.fnmatch_lines(["*1 xfail*"])
 
 
-class TestSkip(object):
+class TestSkip:
     def test_skip_class(self, testdir):
         testdir.makepyfile(
             """
@@ -647,7 +627,7 @@ class TestSkip(object):
         result.stdout.fnmatch_lines(["*unconditional skip*", "*1 skipped*"])
 
 
-class TestSkipif(object):
+class TestSkipif:
     def test_skipif_conditional(self, testdir):
         item = testdir.getitem(
             """
@@ -892,10 +872,7 @@ def test_errors_in_xfail_skip_expressions(testdir):
     )
     result = testdir.runpytest()
     markline = "                ^"
-    if sys.platform.startswith("java"):
-        # XXX report this to java
-        markline = "*" + markline[8:]
-    elif hasattr(sys, "pypy_version_info") and sys.pypy_version_info < (6,):
+    if hasattr(sys, "pypy_version_info") and sys.pypy_version_info < (6,):
         markline = markline[5:]
     elif sys.version_info >= (3, 8) or hasattr(sys, "pypy_version_info"):
         markline = markline[4:]
@@ -1005,7 +982,7 @@ def test_imperativeskip_on_xfail_test(testdir):
     )
 
 
-class TestBooleanCondition(object):
+class TestBooleanCondition:
     def test_skipif(self, testdir):
         testdir.makepyfile(
             """
@@ -1173,6 +1150,14 @@ def test_summary_list_after_errors(testdir):
         [
             "=* FAILURES *=",
             "*= short test summary info =*",
-            "FAILED test_summary_list_after_errors.py::test_fail",
+            "FAILED test_summary_list_after_errors.py::test_fail - assert 0",
         ]
     )
+
+
+def test_importorskip():
+    with pytest.raises(
+        pytest.skip.Exception,
+        match="^could not import 'doesnotexist': No module named .*",
+    ):
+        pytest.importorskip("doesnotexist")
