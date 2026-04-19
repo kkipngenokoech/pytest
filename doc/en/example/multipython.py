@@ -2,18 +2,18 @@
 module containing a parametrized tests testing cross-python
 serialization via the pickle module.
 """
-import distutils.spawn
+import shutil
 import subprocess
 import textwrap
 
 import pytest
 
-pythonlist = ["python2.7", "python3.4", "python3.5"]
+pythonlist = ["python3.5", "python3.6", "python3.7"]
 
 
 @pytest.fixture(params=pythonlist)
-def python1(request, tmpdir):
-    picklefile = tmpdir.join("data.pickle")
+def python1(request, tmp_path):
+    picklefile = tmp_path / "data.pickle"
     return Python(request.param, picklefile)
 
 
@@ -22,16 +22,16 @@ def python2(request, python1):
     return Python(request.param, python1.picklefile)
 
 
-class Python(object):
+class Python:
     def __init__(self, version, picklefile):
-        self.pythonpath = distutils.spawn.find_executable(version)
+        self.pythonpath = shutil.which(version)
         if not self.pythonpath:
-            pytest.skip("{!r} not found".format(version))
+            pytest.skip(f"{version!r} not found")
         self.picklefile = picklefile
 
     def dumps(self, obj):
-        dumpfile = self.picklefile.dirpath("dump.py")
-        dumpfile.write(
+        dumpfile = self.picklefile.with_name("dump.py")
+        dumpfile.write_text(
             textwrap.dedent(
                 r"""
                 import pickle
@@ -46,8 +46,8 @@ class Python(object):
         subprocess.check_call((self.pythonpath, str(dumpfile)))
 
     def load_and_is_true(self, expression):
-        loadfile = self.picklefile.dirpath("load.py")
-        loadfile.write(
+        loadfile = self.picklefile.with_name("load.py")
+        loadfile.write_text(
             textwrap.dedent(
                 r"""
                 import pickle
@@ -69,4 +69,4 @@ class Python(object):
 @pytest.mark.parametrize("obj", [42, {}, {1: 3}])
 def test_basic_objects(python1, python2, obj):
     python1.dumps(obj)
-    python2.load_and_is_true("obj == %s" % obj)
+    python2.load_and_is_true(f"obj == {obj}")
