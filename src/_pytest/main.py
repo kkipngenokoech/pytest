@@ -107,6 +107,7 @@ def pytest_addoption(parser):
 
     group = parser.getgroup("collect", "collection")
     group.addoption(
+        "-C",
         "--collectonly",
         "--collect-only",
         action="store_true",
