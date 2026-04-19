@@ -523,6 +523,36 @@ def import_path(
 
     if mode is ImportMode.importlib:
         module_name = module_name_from_path(path, root)
+        
+        # Check if module is already imported and has the same file path
+        # to prevent duplicate imports of the same module
+        resolved_path = str(path.resolve())
+        for existing_name, existing_mod in sys.modules.items():
+            if existing_mod is not None and hasattr(existing_mod, '__file__'):
+                if existing_mod.__file__ is not None:
+                    try:
+                        existing_resolved = str(Path(existing_mod.__file__).resolve())
+                        if existing_resolved == resolved_path:
+                            # Same file, return existing module and ensure it's also
+                            # available under the new module name
+                            sys.modules[module_name] = existing_mod
+                            insert_missing_modules(sys.modules, module_name)
+                            return existing_mod
+                    except (OSError, ValueError):
+                        # Skip if we can't resolve the existing module's path
+                        continue
+
+        # Check if the module name is already in sys.modules
+        if module_name in sys.modules:
+            existing_mod = sys.modules[module_name]
+            if existing_mod is not None and hasattr(existing_mod, '__file__'):
+                if existing_mod.__file__ is not None:
+                    try:
+                        existing_resolved = str(Path(existing_mod.__file__).resolve())
+                        if existing_resolved == resolved_path:
+                            return existing_mod
+                    except (OSError, ValueError):
+                        pass
 
         for meta_importer in sys.meta_path:
             spec = meta_importer.find_spec(module_name, [str(path.parent)])
