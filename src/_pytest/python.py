@@ -130,6 +130,72 @@ def pytest_cmdline_main(config):
         return 0
 
 
+def showfixtures(config):
+    from _pytest.fixtures import getfixturemarker
+    
+    tw = _pytest._io.TerminalWriter()
+    verbose = config.getvalue("verbose")
+
+    fm = config._getfixturemanager()
+    available = []
+    
+    for argname, fixturedefs in fm._arg2fixturedefs.items():
+        if not fixturedefs:
+            continue
+        if argname.startswith("_") and not verbose:
+            continue
+            
+        fixturedef = fixturedefs[-1]
+        loc = getlocation(fixturedef.func, config.rootdir)
+        
+        # Get fixture scope
+        scope = fixturedef.scope
+        
+        # Get fixture docstring
+        doc = fixturedef.func.__doc__ or ""
+        if doc:
+            doc = doc.strip()
+            
+        available.append((len(argname), argname, scope, loc, doc))
+    
+    available.sort()
+    
+    if available:
+        tw.line()
+        tw.sep("-", "fixtures defined from %s" % (config.rootdir,))
+        
+        for _, argname, scope, loc, doc in available:
+            tw.write("%-*s" % (24, argname), bold=True)
+            tw.write("[%s scope]" % scope, yellow=True)
+            tw.line()
+            
+            if loc:
+                tw.write("    %s" % loc)
+                tw.line()
+                
+            if doc:
+                for line in doc.split("\n"):
+                    tw.write("        %s" % line.strip())
+                    tw.line()
+            tw.line()
+    else:
+        tw.line("no fixtures found")
+
+
+def show_fixtures_per_test(config):
+    from _pytest.fixtures import getfixturemarker
+    
+    tw = _pytest._io.TerminalWriter()
+    verbose = config.getvalue("verbose")
+
+    fm = config._getfixturemanager()
+    
+    # This is a placeholder implementation
+    # The actual implementation would need to collect test items
+    # and show fixtures for each test
+    tw.line("fixtures per test functionality not fully implemented")
+
+
 def pytest_generate_tests(metafunc):
     # those alternative spellings are common - raise a specific error to alert
     # the user
