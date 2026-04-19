@@ -20,6 +20,29 @@ from typing import Optional
 from typing import Set
 from typing import Tuple
 
+
+def _safe_repr(obj, maxsize=240):
+    """Return a safe string representation of an object.
+    
+    If repr() raises an exception, return a fallback representation.
+    """
+    try:
+        s = repr(obj)
+        if len(s) > maxsize:
+            i = max(0, (maxsize - 3) // 2)
+            j = max(0, maxsize - 3 - i)
+            s = s[:i] + "..." + s[-j:]
+        return s
+    except Exception:
+        try:
+            # Try to get the class name at least
+            return "<{} instance at 0x{:x}>".format(
+                obj.__class__.__name__, id(obj)
+            )
+        except Exception:
+            # Last resort fallback
+            return "<unprintable {} object>".format(type(obj).__name__)
+
 import attr
 import pluggy
 import py
@@ -365,7 +388,10 @@ class TerminalReporter:
 
     def write_line(self, line, **markup):
         if not isinstance(line, str):
-            line = str(line, errors="replace")
+            try:
+                line = str(line, errors="replace")
+            except Exception:
+                line = _safe_repr(line)
         self.ensure_newline()
         self._tw.line(line, **markup)
 
@@ -404,7 +430,11 @@ class TerminalReporter:
             self._set_main_color()
 
     def pytest_internalerror(self, excrepr):
-        for line in str(excrepr).split("\n"):
+        try:
+            excrepr_str = str(excrepr)
+        except Exception:
+            excrepr_str = _safe_repr(excrepr)
+        for line in excrepr_str.split("\n"):
             self.write_line("INTERNALERROR> " + line)
         return 1
 
