@@ -246,9 +246,8 @@ def pytest_runtest_setup(item: Item) -> None:
 
 @hookimpl(hookwrapper=True)
 def pytest_runtest_call(item: Item) -> Generator[None, None, None]:
-    xfailed = item._store.get(xfailed_key, None)
-    if xfailed is None:
-        item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
+    # Always re-evaluate xfail marks to catch dynamically added ones
+    item._store[xfailed_key] = xfailed = evaluate_xfail_marks(item)
 
     if not item.config.option.runxfail:
         if xfailed and not xfailed.run:
