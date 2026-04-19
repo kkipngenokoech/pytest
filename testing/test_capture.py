@@ -605,8 +605,8 @@ class TestCaptureFixture(object):
         result.stdout.fnmatch_lines(["*KeyboardInterrupt*"])
         assert result.ret == 2
 
-    @pytest.mark.issue(14)
     def test_capture_and_logging(self, testdir):
+        """#14"""
         p = testdir.makepyfile(
             """\
             import logging
@@ -1050,6 +1050,9 @@ class TestFDCapture(object):
             cap.suspend()
             cap.done()
             pytest.raises(AttributeError, cap.suspend)
+
+    def test_capfd_sys_stdout_mode(self, capfd):
+        assert "b" not in sys.stdout.mode
 
 
 @contextlib.contextmanager
