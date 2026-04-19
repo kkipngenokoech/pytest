@@ -16,13 +16,412 @@ Deprecated Features
 -------------------
 
 Below is a complete list of all pytest features which are considered deprecated. Using those features will issue
-:class:`_pytest.warning_types.PytestWarning` or subclasses, which can be filtered using
-:ref:`standard warning filters <warnings>`.
+:class:`PytestWarning` or subclasses, which can be filtered using :ref:`standard warning filters <warnings>`.
+
+.. _instance-collector-deprecation:
+
+The ``pytest.Instance`` collector
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionremoved:: 7.0
+
+The ``pytest.Instance`` collector type has been removed.
+
+Previously, Python test methods were collected as :class:`~pytest.Class` -> ``Instance`` -> :class:`~pytest.Function`.
+Now :class:`~pytest.Class` collects the test methods directly.
+
+Most plugins which reference ``Instance`` do so in order to ignore or skip it,
+using a check such as ``if isinstance(node, Instance): return``.
+Such plugins should simply remove consideration of ``Instance`` on pytest>=7.
+However, to keep such uses working, a dummy type has been instanted in ``pytest.Instance`` and ``_pytest.python.Instance``,
+and importing it emits a deprecation warning. This will be removed in pytest 8.
+
+
+.. _node-ctor-fspath-deprecation:
+
+``fspath`` argument for Node constructors replaced with ``pathlib.Path``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 7.0
+
+In order to support the transition from ``py.path.local`` to :mod:`pathlib`,
+the ``fspath`` argument to :class:`~_pytest.nodes.Node` constructors like
+:func:`pytest.Function.from_parent()` and :func:`pytest.Class.from_parent()`
+is now deprecated.
+
+Plugins which construct nodes should pass the ``path`` argument, of type
+:class:`pathlib.Path`, instead of the ``fspath`` argument.
+
+Plugins which implement custom items and collectors are encouraged to replace
+``py.path.local`` ``fspath`` parameters with ``pathlib.Path`` parameters, and
+drop any other usage of the ``py`` library if possible.
+
+
+.. _legacy-path-hooks-deprecated:
+
+``py.path.local`` arguments for hooks replaced with ``pathlib.Path``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 7.0
+
+In order to support the transition from ``py.path.local`` to :mod:`pathlib`, the following hooks now receive additional arguments:
+
+*  :func:`pytest_ignore_collect(fspath: pathlib.Path) <_pytest.hookspec.pytest_ignore_collect>` instead of ``path``
+*  :func:`pytest_collect_file(fspath: pathlib.Path) <_pytest.hookspec.pytest_collect_file>` instead of ``path``
+*  :func:`pytest_pycollect_makemodule(fspath: pathlib.Path) <_pytest.hookspec.pytest_pycollect_makemodule>` instead of ``path``
+*  :func:`pytest_report_header(startpath: pathlib.Path) <_pytest.hookspec.pytest_report_header>` instead of ``startdir``
+*  :func:`pytest_report_collectionfinish(startpath: pathlib.Path) <_pytest.hookspec.pytest_report_collectionfinish>` instead of ``startdir``
+
+The accompanying ``py.path.local`` based paths have been deprecated: plugins which manually invoke those hooks should only pass the new ``pathlib.Path`` arguments, and users should change their hook implementations to use the new ``pathlib.Path`` arguments.
+
+Directly constructing internal classes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 7.0
+
+Directly constructing the following classes is now deprecated:
+
+- ``_pytest.mark.structures.Mark``
+- ``_pytest.mark.structures.MarkDecorator``
+- ``_pytest.mark.structures.MarkGenerator``
+- ``_pytest.python.Metafunc``
+- ``_pytest.runner.CallInfo``
+- ``_pytest._code.ExceptionInfo``
+- ``_pytest.config.argparsing.Parser``
+- ``_pytest.config.argparsing.OptionGroup``
+- ``_pytest.pytester.HookRecorder``
+
+These constructors have always been considered private, but now issue a deprecation warning, which may become a hard error in pytest 8.
+
+.. _cmdline-preparse-deprecated:
+
+Passing ``msg=`` to ``pytest.skip``, ``pytest.fail`` or ``pytest.exit``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 7.0
+
+Passing the keyword argument ``msg`` to :func:`pytest.skip`, :func:`pytest.fail` or :func:`pytest.exit`
+is now deprecated and ``reason`` should be used instead.  This change is to bring consistency between these
+functions and the``@pytest.mark.skip`` and ``@pytest.mark.xfail`` markers which already accept a ``reason`` argument.
+
+.. code-block:: python
+
+    def test_fail_example():
+        # old
+        pytest.fail(msg="foo")
+        # new
+        pytest.fail(reason="bar")
+
+
+    def test_skip_example():
+        # old
+        pytest.skip(msg="foo")
+        # new
+        pytest.skip(reason="bar")
+
+
+    def test_exit_example():
+        # old
+        pytest.exit(msg="foo")
+        # new
+        pytest.exit(reason="bar")
+
+
+Implementing the ``pytest_cmdline_preparse`` hook
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 7.0
+
+Implementing the :func:`pytest_cmdline_preparse <_pytest.hookspec.pytest_cmdline_preparse>` hook has been officially deprecated.
+Implement the :func:`pytest_load_initial_conftests <_pytest.hookspec.pytest_load_initial_conftests>` hook instead.
+
+.. code-block:: python
+
+    def pytest_cmdline_preparse(config: Config, args: List[str]) -> None:
+        ...
+
+
+    # becomes:
+
+
+    def pytest_load_initial_conftests(
+        early_config: Config, parser: Parser, args: List[str]
+    ) -> None:
+        ...
+
+.. _diamond-inheritance-deprecated:
+
+Diamond inheritance between :class:`pytest.Collector` and :class:`pytest.Item`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 7.0
+
+Defining a custom pytest node type which is both an :class:`pytest.Item <Item>` and a :class:`pytest.Collector <Collector>` (e.g. :class:`pytest.File <File>`) now issues a warning.
+It was never sanely supported and triggers hard to debug errors.
+
+Some plugins providing linting/code analysis have been using this as a hack.
+Instead, a separate collector node should be used, which collects the item. See
+:ref:`non-python tests` for an example, as well as an `example pr fixing inheritance`_.
+
+.. _example pr fixing inheritance: https://github.com/asmeurer/pytest-flakes/pull/40/files
+
+
+Backward compatibilities in ``Parser.addoption``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 2.4
+
+Several behaviors of :meth:`Parser.addoption <pytest.Parser.addoption>` are now
+scheduled for removal in pytest 8 (deprecated since pytest 2.4.0):
+
+- ``parser.addoption(..., help=".. %default ..")`` - use ``%(default)s`` instead.
+- ``parser.addoption(..., type="int/string/float/complex")`` - use ``type=int`` etc. instead.
+
+
+Raising ``unittest.SkipTest`` during collection
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 7.0
+
+Raising :class:`unittest.SkipTest` to skip collection of tests during the
+pytest collection phase is deprecated. Use :func:`pytest.skip` instead.
+
+Note: This deprecation only relates to using `unittest.SkipTest` during test
+collection. You are probably not doing that. Ordinary usage of
+:class:`unittest.SkipTest` / :meth:`unittest.TestCase.skipTest` /
+:func:`unittest.skip` in unittest test cases is fully supported.
+
+Using ``pytest.warns(None)``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 7.0
+
+:func:`pytest.warns(None) <pytest.warns>` is now deprecated because many people used
+it to mean "this code does not emit warnings", but it actually had the effect of
+checking that the code emits at least one warning of any type - like ``pytest.warns()``
+or ``pytest.warns(Warning)``.
+
+
+The ``--strict`` command-line option
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 6.2
+
+The ``--strict`` command-line option has been deprecated in favor of ``--strict-markers``, which
+better conveys what the option does.
+
+We have plans to maybe in the future to reintroduce ``--strict`` and make it an encompassing
+flag for all strictness related options (``--strict-markers`` and ``--strict-config``
+at the moment, more might be introduced in the future).
+
+
+The ``yield_fixture`` function/decorator
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 6.2
+
+``pytest.yield_fixture`` is a deprecated alias for :func:`pytest.fixture`.
+
+It has been so for a very long time, so can be search/replaced safely.
+
+
+The ``pytest_warning_captured`` hook
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 6.0
+
+This hook has an `item` parameter which cannot be serialized by ``pytest-xdist``.
+
+Use the ``pytest_warning_recored`` hook instead, which replaces the ``item`` parameter
+by a ``nodeid`` parameter.
+
+The ``pytest.collect`` module
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 6.0
+
+The ``pytest.collect`` module is no longer part of the public API, all its names
+should now be imported from ``pytest`` directly instead.
+
+
+The ``pytest._fillfuncargs`` function
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 6.0
+
+This function was kept for backward compatibility with an older plugin.
+
+It's functionality is not meant to be used directly, but if you must replace
+it, use `function._request._fillfixtures()` instead, though note this is not
+a public API and may break in the future.
+
+
+Removed Features
+----------------
+
+As stated in our :ref:`backwards-compatibility` policy, deprecated features are removed only in major releases after
+an appropriate period of deprecation has passed.
+
+``--no-print-logs`` command-line option
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.4
+.. versionremoved:: 6.0
+
+
+The ``--no-print-logs`` option and ``log_print`` ini setting are removed. If
+you used them, please use ``--show-capture`` instead.
+
+A ``--show-capture`` command-line option was added in ``pytest 3.5.0`` which allows to specify how to
+display captured output when tests fail: ``no``, ``stdout``, ``stderr``, ``log`` or ``all`` (the default).
+
+
+.. _resultlog deprecated:
+
+Result log (``--result-log``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 4.0
+.. versionremoved:: 6.0
+
+The ``--result-log`` option produces a stream of test reports which can be
+analysed at runtime, but it uses a custom format which requires users to implement their own
+parser.
+
+The  `pytest-reportlog <https://github.com/pytest-dev/pytest-reportlog>`__ plugin provides a ``--report-log`` option, a more standard and extensible alternative, producing
+one JSON object per-line, and should cover the same use cases. Please try it out and provide feedback.
+
+The ``pytest-reportlog`` plugin might even be merged into the core
+at some point, depending on the plans for the plugins and number of users using it.
+
+``pytest_collect_directory`` hook
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionremoved:: 6.0
+
+The ``pytest_collect_directory`` has not worked properly for years (it was called
+but the results were ignored). Users may consider using :func:`pytest_collection_modifyitems <_pytest.hookspec.pytest_collection_modifyitems>` instead.
+
+TerminalReporter.writer
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionremoved:: 6.0
+
+The ``TerminalReporter.writer`` attribute has been deprecated and should no longer be used. This
+was inadvertently exposed as part of the public API of that plugin and ties it too much
+with ``py.io.TerminalWriter``.
+
+Plugins that used ``TerminalReporter.writer`` directly should instead use ``TerminalReporter``
+methods that provide the same functionality.
+
+.. _junit-family changed default value:
+
+``junit_family`` default value change to "xunit2"
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionchanged:: 6.0
+
+The default value of ``junit_family`` option will change to ``xunit2`` in pytest 6.0, which
+is an update of the old ``xunit1`` format and is supported by default in modern tools
+that manipulate this type of file (for example, Jenkins, Azure Pipelines, etc.).
+
+Users are recommended to try the new ``xunit2`` format and see if their tooling that consumes the JUnit
+XML file supports it.
+
+To use the new format, update your ``pytest.ini``:
+
+.. code-block:: ini
+
+    [pytest]
+    junit_family=xunit2
+
+If you discover that your tooling does not support the new format, and want to keep using the
+legacy version, set the option to ``legacy`` instead:
+
+.. code-block:: ini
+
+    [pytest]
+    junit_family=legacy
+
+By using ``legacy`` you will keep using the legacy/xunit1 format when upgrading to
+pytest 6.0, where the default format will be ``xunit2``.
+
+In order to let users know about the transition, pytest will issue a warning in case
+the ``--junitxml`` option is given in the command line but ``junit_family`` is not explicitly
+configured in ``pytest.ini``.
+
+Services known to support the ``xunit2`` format:
+
+* `Jenkins <https://www.jenkins.io/>`__ with the `JUnit <https://plugins.jenkins.io/junit>`__ plugin.
+* `Azure Pipelines <https://azure.microsoft.com/en-us/services/devops/pipelines>`__.
+
+Node Construction changed to ``Node.from_parent``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionchanged:: 6.0
+
+The construction of nodes now should use the named constructor ``from_parent``.
+This limitation in api surface intends to enable better/simpler refactoring of the collection tree.
+
+This means that instead of :code:`MyItem(name="foo", parent=collector, obj=42)`
+one now has to invoke :code:`MyItem.from_parent(collector, name="foo")`.
+
+Plugins that wish to support older versions of pytest and suppress the warning can use
+`hasattr` to check if `from_parent` exists in that version:
+
+.. code-block:: python
+
+    def pytest_pycollect_makeitem(collector, name, obj):
+        if hasattr(MyItem, "from_parent"):
+            item = MyItem.from_parent(collector, name="foo")
+            item.obj = 42
+            return item
+        else:
+            return MyItem(name="foo", parent=collector, obj=42)
+
+Note that ``from_parent`` should only be called with keyword arguments for the parameters.
+
+
+``pytest.fixture`` arguments are keyword only
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionremoved:: 6.0
+
+Passing arguments to pytest.fixture() as positional arguments has been removed - pass them by keyword instead.
+
+``funcargnames`` alias for ``fixturenames``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionremoved:: 6.0
+
+The ``FixtureRequest``, ``Metafunc``, and ``Function`` classes track the names of
+their associated fixtures, with the aptly-named ``fixturenames`` attribute.
+
+Prior to pytest 2.3, this attribute was named ``funcargnames``, and we have kept
+that as an alias since.  It is finally due for removal, as it is often confusing
+in places where we or plugin authors must distinguish between fixture names and
+names supplied by non-fixture things such as ``pytest.mark.parametrize``.
+
+
+.. _pytest.config global deprecated:
+
+``pytest.config`` global
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionremoved:: 5.0
+
+The ``pytest.config`` global object is deprecated.  Instead use
+``request.config`` (via the ``request`` fixture) or if you are a plugin author
+use the ``pytest_configure(config)`` hook. Note that many hooks can also access
+the ``config`` object indirectly, through ``session.config`` or ``item.config`` for example.
+
+
+.. _`raises message deprecated`:
 
 ``"message"`` parameter of ``pytest.raises``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. deprecated:: 4.1
+.. versionremoved:: 5.0
 
 It is a common mistake to think this parameter will match the exception message, while in fact
 it only serves to provide a custom message in case the ``pytest.raises`` check fails. To prevent
@@ -50,25 +449,15 @@ Becomes:
 
 
 If you still have concerns about this deprecation and future removal, please comment on
-`issue #3974 <https://github.com/pytest-dev/pytest/issues/3974>`__.
+:issue:`3974`.
 
-
-``pytest.config`` global
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 4.1
-
-The ``pytest.config`` global object is deprecated.  Instead use
-``request.config`` (via the ``request`` fixture) or if you are a plugin author
-use the ``pytest_configure(config)`` hook. Note that many hooks can also access
-the ``config`` object indirectly, through ``session.config`` or ``item.config`` for example.
 
 .. _raises-warns-exec:
 
 ``raises`` / ``warns`` with a string as the second argument
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. deprecated:: 4.1
+.. versionremoved:: 5.0
 
 Use the context manager form of these instead.  When necessary, invoke ``exec``
 directly.
@@ -100,26 +489,6 @@ Becomes:
 
 
 
-
-
-Result log (``--result-log``)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
-
-The ``--resultlog`` command line option has been deprecated: it is little used
-and there are more modern and better alternatives, for example `pytest-tap <https://tappy.readthedocs.io/en/latest/>`_.
-
-This feature will be effectively removed in pytest 4.0 as the team intends to include a better alternative in the core.
-
-If you have any concerns, please don't hesitate to `open an issue <https://github.com/pytest-dev/pytest/issues>`__.
-
-Removed Features
-----------------
-
-As stated in our :ref:`backwards-compatibility` policy, deprecated features are removed only in major releases after
-an appropriate period of deprecation has passed.
-
 Using ``Class`` in custom Collectors
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -132,6 +501,8 @@ collection.
 This issue should affect only advanced plugins who create new collection types, so if you see this warning
 message please contact the authors so they can change the code.
 
+
+.. _marks in pytest.parametrize deprecated:
 
 marks in ``pytest.mark.parametrize``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -181,6 +552,8 @@ To update the code, use ``pytest.param``:
         ...
 
 
+.. _pytest_funcarg__ prefix deprecated:
+
 ``pytest_funcarg__`` prefix
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -212,13 +585,15 @@ Switch over to the ``@pytest.fixture`` decorator:
 to avoid conflicts with other distutils commands.
 
 
+.. _metafunc.addcall deprecated:
+
 Metafunc.addcall
 ~~~~~~~~~~~~~~~~
 
 .. versionremoved:: 4.0
 
-:meth:`_pytest.python.Metafunc.addcall` was a precursor to the current parametrized mechanism. Users should use
-:meth:`_pytest.python.Metafunc.parametrize` instead.
+``Metafunc.addcall`` was a precursor to the current parametrized mechanism. Users should use
+:meth:`pytest.Metafunc.parametrize` instead.
 
 Example:
 
@@ -235,6 +610,8 @@ Becomes:
     def pytest_generate_tests(metafunc):
         metafunc.parametrize("i", [1, 2], ids=["1", "2"])
 
+
+.. _cached_setup deprecated:
 
 ``cached_setup``
 ~~~~~~~~~~~~~~~~
@@ -264,19 +641,23 @@ This should be updated to make use of standard fixture mechanisms:
         session.close()
 
 
-You can consult `funcarg comparison section in the docs <https://docs.pytest.org/en/latest/funcarg_compare.html>`_ for
+You can consult :std:doc:`funcarg comparison section in the docs <funcarg_compare>` for
 more information.
 
+
+.. _pytest_plugins in non-top-level conftest files deprecated:
 
 pytest_plugins in non-top-level conftest files
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. versionremoved:: 4.0
 
-Defining ``pytest_plugins`` is now deprecated in non-top-level conftest.py
+Defining :globalvar:`pytest_plugins` is now deprecated in non-top-level conftest.py
 files because they will activate referenced plugins *globally*, which is surprising because for all other pytest
 features ``conftest.py`` files are only *active* for tests at or below it.
 
+
+.. _config.warn and node.warn deprecated:
 
 ``Config.warn`` and ``Node.warn``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -305,6 +686,8 @@ Becomes:
 
 * ``node.warn("CI", "some message")``: this code/message form has been **removed** and should be converted to the warning instance form above.
 
+.. _record_xml_property deprecated:
+
 record_xml_property
 ~~~~~~~~~~~~~~~~~~~
 
@@ -328,6 +711,8 @@ Change to:
         ...
 
 
+.. _passing command-line string to pytest.main deprecated:
+
 Passing command-line string to ``pytest.main()``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -349,6 +734,8 @@ Pass a list instead:
 By passing a string, users expect that pytest will interpret that command-line using the shell rules they are working
 on (for example ``bash`` or ``Powershell``), but this is very hard/impossible to do in a portable way.
 
+
+.. _calling fixtures directly deprecated:
 
 Calling fixtures directly
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -403,6 +790,8 @@ with the ``name`` parameter:
         return cell()
 
 
+.. _yield tests deprecated:
+
 ``yield`` tests
 ~~~~~~~~~~~~~~~
 
@@ -431,13 +820,17 @@ This form of test function doesn't support fixtures properly, and users should s
     def test_squared(x, y):
         assert x ** x == y
 
+.. _internal classes accessed through node deprecated:
+
 Internal classes accessed through ``Node``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. versionremoved:: 4.0
 
 Access of ``Module``, ``Function``, ``Class``, ``Instance``, ``File`` and ``Item`` through ``Node`` instances now issue
-this warning::
+this warning:
+
+.. code-block:: text
 
     usage of Function.Module is deprecated, please use pytest.Module instead
 
@@ -450,7 +843,7 @@ This has been documented as deprecated for years, but only now we are actually e
 
 .. versionremoved:: 4.0
 
-As part of a large :ref:`marker-revamp`, :meth:`_pytest.nodes.Node.get_marker` is deprecated. See
+As part of a large :ref:`marker-revamp`, ``_pytest.nodes.Node.get_marker`` is removed. See
 :ref:`the documentation <update marker code>` on tips on how to update your code.
 
 
@@ -462,6 +855,8 @@ As part of a large :ref:`marker-revamp`, :meth:`_pytest.nodes.Node.get_marker` i
 As part of a large :ref:`marker-revamp` we already deprecated using ``MarkInfo``
 the only correct way to get markers of an element is via ``node.iter_markers(name)``.
 
+
+.. _pytest.namespace deprecated:
 
 ``pytest_namespace``
 ~~~~~~~~~~~~~~~~~~~~
@@ -494,40 +889,3 @@ As a stopgap measure, plugin authors may still inject their names into pytest's 
 
     def pytest_configure():
         pytest.my_symbol = MySymbol()
-
-
-
-
-Reinterpretation mode (``--assert=reinterp``)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. versionremoved:: 3.0
-
-Reinterpretation mode has now been removed and only plain and rewrite
-mode are available, consequently the ``--assert=reinterp`` option is
-no longer available.  This also means files imported from plugins or
-``conftest.py`` will not benefit from improved assertions by
-default, you should use ``pytest.register_assert_rewrite()`` to
-explicitly turn on assertion rewriting for those files.
-
-Removed command-line options
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. versionremoved:: 3.0
-
-The following deprecated commandline options were removed:
-
-* ``--genscript``: no longer supported;
-* ``--no-assert``: use ``--assert=plain`` instead;
-* ``--nomagic``: use ``--assert=plain`` instead;
-* ``--report``: use ``-r`` instead;
-
-py.test-X* entry points
-~~~~~~~~~~~~~~~~~~~~~~~
-
-.. versionremoved:: 3.0
-
-Removed all ``py.test-X*`` entry points. The versioned, suffixed entry points
-were never documented and a leftover from a pre-virtualenv era. These entry
-points also created broken entry points in wheels, so removing them also
-removes a source of confusion for users.

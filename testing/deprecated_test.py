@@ -1,230 +1,306 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-import os
+import re
+import sys
+import warnings
+from pathlib import Path
+from unittest import mock
 
 import pytest
-from _pytest.warning_types import PytestDeprecationWarning
-from _pytest.warnings import SHOW_PYTEST_WARNINGS_ARG
-
-pytestmark = pytest.mark.pytester_example_path("deprecated")
-
-
-def test_pytest_setup_cfg_unsupported(testdir):
-    testdir.makefile(
-        ".cfg",
-        setup="""
-        [pytest]
-        addopts = --verbose
-    """,
-    )
-    with pytest.raises(pytest.fail.Exception):
-        testdir.runpytest()
+from _pytest import deprecated
+from _pytest.compat import legacy_path
+from _pytest.pytester import Pytester
+from pytest import PytestDeprecationWarning
 
 
-def test_pytest_custom_cfg_unsupported(testdir):
-    testdir.makefile(
-        ".cfg",
-        custom="""
-        [pytest]
-        addopts = --verbose
-    """,
-    )
-    with pytest.raises(pytest.fail.Exception):
-        testdir.runpytest("-c", "custom.cfg")
+@pytest.mark.parametrize("attribute", pytest.collect.__all__)  # type: ignore
+# false positive due to dynamic attribute
+def test_pytest_collect_module_deprecated(attribute) -> None:
+    with pytest.warns(DeprecationWarning, match=attribute):
+        getattr(pytest.collect, attribute)
 
 
-def test_getfuncargvalue_is_deprecated(request):
-    pytest.deprecated_call(request.getfuncargvalue, "tmpdir")
-
-
+@pytest.mark.parametrize("plugin", sorted(deprecated.DEPRECATED_EXTERNAL_PLUGINS))
 @pytest.mark.filterwarnings("default")
-def test_resultlog_is_deprecated(testdir):
-    result = testdir.runpytest("--help")
-    result.stdout.fnmatch_lines(["*DEPRECATED path for machine-readable result log*"])
+def test_external_plugins_integrated(pytester: Pytester, plugin) -> None:
+    pytester.syspathinsert()
+    pytester.makepyfile(**{plugin: ""})
 
-    testdir.makepyfile(
-        """
-        def test():
-            pass
+    with pytest.warns(pytest.PytestConfigWarning):
+        pytester.parseconfig("-p", plugin)
+
+
+def test_fillfuncargs_is_deprecated() -> None:
+    with pytest.warns(
+        pytest.PytestDeprecationWarning,
+        match=re.escape(
+            "pytest._fillfuncargs() is deprecated, use "
+            "function._request._fillfixtures() instead if you cannot avoid reaching into internals."
+        ),
+    ):
+        pytest._fillfuncargs(mock.Mock())
+
+
+def test_fillfixtures_is_deprecated() -> None:
+    import _pytest.fixtures
+
+    with pytest.warns(
+        pytest.PytestDeprecationWarning,
+        match=re.escape(
+            "_pytest.fixtures.fillfixtures() is deprecated, use "
+            "function._request._fillfixtures() instead if you cannot avoid reaching into internals."
+        ),
+    ):
+        _pytest.fixtures.fillfixtures(mock.Mock())
+
+
+def test_minus_k_dash_is_deprecated(pytester: Pytester) -> None:
+    threepass = pytester.makepyfile(
+        test_threepass="""
+        def test_one(): assert 1
+        def test_two(): assert 1
+        def test_three(): assert 1
     """
     )
-    result = testdir.runpytest("--result-log=%s" % testdir.tmpdir.join("result.log"))
+    result = pytester.runpytest("-k=-test_two", threepass)
+    result.stdout.fnmatch_lines(["*The `-k '-expr'` syntax*deprecated*"])
+
+
+def test_minus_k_colon_is_deprecated(pytester: Pytester) -> None:
+    threepass = pytester.makepyfile(
+        test_threepass="""
+        def test_one(): assert 1
+        def test_two(): assert 1
+        def test_three(): assert 1
+    """
+    )
+    result = pytester.runpytest("-k", "test_two:", threepass)
+    result.stdout.fnmatch_lines(["*The `-k 'expr:'` syntax*deprecated*"])
+
+
+def test_fscollector_gethookproxy_isinitpath(pytester: Pytester) -> None:
+    module = pytester.getmodulecol(
+        """
+        def test_foo(): pass
+        """,
+        withinit=True,
+    )
+    assert isinstance(module, pytest.Module)
+    package = module.parent
+    assert isinstance(package, pytest.Package)
+
+    with pytest.warns(pytest.PytestDeprecationWarning, match="gethookproxy"):
+        package.gethookproxy(pytester.path)
+
+    with pytest.warns(pytest.PytestDeprecationWarning, match="isinitpath"):
+        package.isinitpath(pytester.path)
+
+    # The methods on Session are *not* deprecated.
+    session = module.session
+    with warnings.catch_warnings(record=True) as rec:
+        session.gethookproxy(pytester.path)
+        session.isinitpath(pytester.path)
+    assert len(rec) == 0
+
+
+def test_strict_option_is_deprecated(pytester: Pytester) -> None:
+    """--strict is a deprecated alias to --strict-markers (#7530)."""
+    pytester.makepyfile(
+        """
+        import pytest
+
+        @pytest.mark.unknown
+        def test_foo(): pass
+        """
+    )
+    result = pytester.runpytest("--strict")
     result.stdout.fnmatch_lines(
         [
-            "*--result-log is deprecated and scheduled for removal in pytest 5.0*",
-            "*See https://docs.pytest.org/en/latest/deprecations.html#result-log-result-log for more information*",
+            "'unknown' not found in `markers` configuration option",
+            "*PytestRemovedIn8Warning: The --strict option is deprecated, use --strict-markers instead.",
         ]
     )
 
 
-def test_terminal_reporter_writer_attr(pytestconfig):
-    """Check that TerminalReporter._tw is also available as 'writer' (#2984)
-    This attribute is planned to be deprecated in 3.4.
-    """
-    try:
-        import xdist  # noqa
+def test_yield_fixture_is_deprecated() -> None:
+    with pytest.warns(DeprecationWarning, match=r"yield_fixture is deprecated"):
 
-        pytest.skip("xdist workers disable the terminal reporter plugin")
-    except ImportError:
-        pass
-    terminal_reporter = pytestconfig.pluginmanager.get_plugin("terminalreporter")
-    assert terminal_reporter.writer is terminal_reporter._tw
+        @pytest.yield_fixture
+        def fix():
+            assert False
 
 
-@pytest.mark.parametrize("plugin", ["catchlog", "capturelog"])
-@pytest.mark.filterwarnings("default")
-def test_pytest_catchlog_deprecated(testdir, plugin):
-    testdir.makepyfile(
+def test_private_is_deprecated() -> None:
+    class PrivateInit:
+        def __init__(self, foo: int, *, _ispytest: bool = False) -> None:
+            deprecated.check_ispytest(_ispytest)
+
+    with pytest.warns(
+        pytest.PytestDeprecationWarning, match="private pytest class or function"
+    ):
+        PrivateInit(10)
+
+    # Doesn't warn.
+    PrivateInit(10, _ispytest=True)
+
+
+def test_raising_unittest_skiptest_during_collection_is_deprecated(
+    pytester: Pytester,
+) -> None:
+    pytester.makepyfile(
         """
-        def test_func(pytestconfig):
-            pytestconfig.pluginmanager.register(None, 'pytest_{}')
-    """.format(
-            plugin
-        )
-    )
-    res = testdir.runpytest()
-    assert res.ret == 0
-    res.stdout.fnmatch_lines(
-        ["*pytest-*log plugin has been merged into the core*", "*1 passed, 1 warnings*"]
-    )
-
-
-def test_raises_message_argument_deprecated():
-    with pytest.warns(pytest.PytestDeprecationWarning):
-        with pytest.raises(RuntimeError, message="foobar"):
-            raise RuntimeError
-
-
-def test_pytest_plugins_in_non_top_level_conftest_deprecated(testdir):
-    from _pytest.deprecated import PYTEST_PLUGINS_FROM_NON_TOP_LEVEL_CONFTEST
-
-    testdir.makepyfile(
-        **{
-            "subdirectory/conftest.py": """
-        pytest_plugins=['capture']
-    """
-        }
-    )
-    testdir.makepyfile(
+        import unittest
+        raise unittest.SkipTest()
         """
-        def test_func():
-            pass
-    """
     )
-    res = testdir.runpytest(SHOW_PYTEST_WARNINGS_ARG)
-    assert res.ret == 2
-    msg = str(PYTEST_PLUGINS_FROM_NON_TOP_LEVEL_CONFTEST).splitlines()[0]
-    res.stdout.fnmatch_lines(
-        ["*{msg}*".format(msg=msg), "*subdirectory{sep}conftest.py*".format(sep=os.sep)]
+    result = pytester.runpytest()
+    result.stdout.fnmatch_lines(
+        [
+            "*PytestRemovedIn8Warning: Raising unittest.SkipTest*",
+        ]
     )
 
 
-@pytest.mark.parametrize("use_pyargs", [True, False])
-def test_pytest_plugins_in_non_top_level_conftest_unsupported_pyargs(
-    testdir, use_pyargs
-):
-    """When using --pyargs, do not emit the warning about non-top-level conftest warnings (#4039, #4044)"""
-    from _pytest.deprecated import PYTEST_PLUGINS_FROM_NON_TOP_LEVEL_CONFTEST
+@pytest.mark.parametrize("hooktype", ["hook", "ihook"])
+def test_hookproxy_warnings_for_fspath(tmp_path, hooktype, request):
+    path = legacy_path(tmp_path)
 
-    files = {
-        "src/pkg/__init__.py": "",
-        "src/pkg/conftest.py": "",
-        "src/pkg/test_root.py": "def test(): pass",
-        "src/pkg/sub/__init__.py": "",
-        "src/pkg/sub/conftest.py": "pytest_plugins=['capture']",
-        "src/pkg/sub/test_bar.py": "def test(): pass",
-    }
-    testdir.makepyfile(**files)
-    testdir.syspathinsert(testdir.tmpdir.join("src"))
-
-    args = ("--pyargs", "pkg") if use_pyargs else ()
-    args += (SHOW_PYTEST_WARNINGS_ARG,)
-    res = testdir.runpytest(*args)
-    assert res.ret == (0 if use_pyargs else 2)
-    msg = str(PYTEST_PLUGINS_FROM_NON_TOP_LEVEL_CONFTEST).splitlines()[0]
-    if use_pyargs:
-        assert msg not in res.stdout.str()
+    PATH_WARN_MATCH = r".*path: py\.path\.local\) argument is deprecated, please use \(fspath: pathlib\.Path.*"
+    if hooktype == "ihook":
+        hooks = request.node.ihook
     else:
-        res.stdout.fnmatch_lines(["*{msg}*".format(msg=msg)])
+        hooks = request.config.hook
+
+    with pytest.warns(PytestDeprecationWarning, match=PATH_WARN_MATCH) as r:
+        l1 = sys._getframe().f_lineno
+        hooks.pytest_ignore_collect(config=request.config, path=path, fspath=tmp_path)
+        l2 = sys._getframe().f_lineno
+
+    (record,) = r
+    assert record.filename == __file__
+    assert l1 < record.lineno < l2
+
+    hooks.pytest_ignore_collect(config=request.config, fspath=tmp_path)
+
+    # Passing entirely *different* paths is an outright error.
+    with pytest.raises(ValueError, match=r"path.*fspath.*need to be equal"):
+        with pytest.warns(PytestDeprecationWarning, match=PATH_WARN_MATCH) as r:
+            hooks.pytest_ignore_collect(
+                config=request.config, path=path, fspath=Path("/bla/bla")
+            )
 
 
-def test_pytest_plugins_in_non_top_level_conftest_unsupported_no_top_level_conftest(
-    testdir
-):
-    from _pytest.deprecated import PYTEST_PLUGINS_FROM_NON_TOP_LEVEL_CONFTEST
-
-    subdirectory = testdir.tmpdir.join("subdirectory")
-    subdirectory.mkdir()
-    testdir.makeconftest(
-        """
-        pytest_plugins=['capture']
-    """
-    )
-    testdir.tmpdir.join("conftest.py").move(subdirectory.join("conftest.py"))
-
-    testdir.makepyfile(
-        """
-        def test_func():
-            pass
-    """
-    )
-
-    res = testdir.runpytest_subprocess()
-    assert res.ret == 2
-    msg = str(PYTEST_PLUGINS_FROM_NON_TOP_LEVEL_CONFTEST).splitlines()[0]
-    res.stdout.fnmatch_lines(
-        ["*{msg}*".format(msg=msg), "*subdirectory{sep}conftest.py*".format(sep=os.sep)]
-    )
-
-
-def test_pytest_plugins_in_non_top_level_conftest_unsupported_no_false_positives(
-    testdir
-):
-    from _pytest.deprecated import PYTEST_PLUGINS_FROM_NON_TOP_LEVEL_CONFTEST
-
-    subdirectory = testdir.tmpdir.join("subdirectory")
-    subdirectory.mkdir()
-    testdir.makeconftest(
-        """
-        pass
-    """
-    )
-    testdir.tmpdir.join("conftest.py").move(subdirectory.join("conftest.py"))
-
-    testdir.makeconftest(
-        """
-        import warnings
-        warnings.filterwarnings('always', category=DeprecationWarning)
-        pytest_plugins=['capture']
-    """
-    )
-    testdir.makepyfile(
-        """
-        def test_func():
-            pass
-    """
-    )
-    res = testdir.runpytest_subprocess()
-    assert res.ret == 0
-    msg = str(PYTEST_PLUGINS_FROM_NON_TOP_LEVEL_CONFTEST).splitlines()[0]
-    assert msg not in res.stdout.str()
-
-
-def test_fixture_named_request(testdir):
-    testdir.copy_example()
-    result = testdir.runpytest()
-    result.stdout.fnmatch_lines(
-        [
-            "*'request' is a reserved name for fixtures and will raise an error in future versions"
-        ]
-    )
-
-
-def test_pytest_warns_unknown_kwargs():
+def test_warns_none_is_deprecated():
     with pytest.warns(
         PytestDeprecationWarning,
-        match=r"pytest.warns\(\) got unexpected keyword arguments: \['foo'\]",
+        match=re.escape(
+            "Passing None to catch any warning has been deprecated, pass no arguments instead:\n "
+            "Replace pytest.warns(None) by simply pytest.warns()."
+        ),
     ):
-        pytest.warns(UserWarning, foo="hello")
+        with pytest.warns(None):  # type: ignore[call-overload]
+            pass
+
+
+class TestSkipMsgArgumentDeprecated:
+    def test_skip_with_msg_is_deprecated(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
+            """
+            import pytest
+
+            def test_skipping_msg():
+                pytest.skip(msg="skippedmsg")
+            """
+        )
+        result = pytester.runpytest(p)
+        result.stdout.fnmatch_lines(
+            [
+                "*PytestRemovedIn8Warning: pytest.skip(msg=...) is now deprecated, "
+                "use pytest.skip(reason=...) instead",
+                '*pytest.skip(msg="skippedmsg")*',
+            ]
+        )
+        result.assert_outcomes(skipped=1, warnings=1)
+
+    def test_fail_with_msg_is_deprecated(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
+            """
+            import pytest
+
+            def test_failing_msg():
+                pytest.fail(msg="failedmsg")
+            """
+        )
+        result = pytester.runpytest(p)
+        result.stdout.fnmatch_lines(
+            [
+                "*PytestRemovedIn8Warning: pytest.fail(msg=...) is now deprecated, "
+                "use pytest.fail(reason=...) instead",
+                '*pytest.fail(msg="failedmsg")',
+            ]
+        )
+        result.assert_outcomes(failed=1, warnings=1)
+
+    def test_exit_with_msg_is_deprecated(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
+            """
+            import pytest
+
+            def test_exit_msg():
+                pytest.exit(msg="exitmsg")
+            """
+        )
+        result = pytester.runpytest(p)
+        result.stdout.fnmatch_lines(
+            [
+                "*PytestRemovedIn8Warning: pytest.exit(msg=...) is now deprecated, "
+                "use pytest.exit(reason=...) instead",
+            ]
+        )
+        result.assert_outcomes(warnings=1)
+
+
+def test_deprecation_of_cmdline_preparse(pytester: Pytester) -> None:
+    pytester.makeconftest(
+        """
+        def pytest_cmdline_preparse(config, args):
+            ...
+
+        """
+    )
+    result = pytester.runpytest()
+    result.stdout.fnmatch_lines(
+        [
+            "*PytestRemovedIn8Warning: The pytest_cmdline_preparse hook is deprecated*",
+            "*Please use pytest_load_initial_conftests hook instead.*",
+        ]
+    )
+
+
+def test_node_ctor_fspath_argument_is_deprecated(pytester: Pytester) -> None:
+    mod = pytester.getmodulecol("")
+
+    with pytest.warns(
+        pytest.PytestDeprecationWarning,
+        match=re.escape("The (fspath: py.path.local) argument to File is deprecated."),
+    ):
+        pytest.File.from_parent(
+            parent=mod.parent,
+            fspath=legacy_path("bla"),
+        )
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 7),
+    reason="This deprecation can only be emitted on python>=3.7",
+)
+def test_importing_instance_is_deprecated(pytester: Pytester) -> None:
+    with pytest.warns(
+        pytest.PytestDeprecationWarning,
+        match=re.escape("The pytest.Instance collector type is deprecated"),
+    ):
+        pytest.Instance
+
+    with pytest.warns(
+        pytest.PytestDeprecationWarning,
+        match=re.escape("The pytest.Instance collector type is deprecated"),
+    ):
+        from _pytest.python import Instance  # noqa: F401
