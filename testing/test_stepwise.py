@@ -4,7 +4,7 @@ import pytest
 @pytest.fixture
 def stepwise_testdir(testdir):
     # Rather than having to modify our testfile between tests, we introduce
-    # a flag for wether or not the second test should fail.
+    # a flag for whether or not the second test should fail.
     testdir.makeconftest(
         """
 def pytest_addoption(parser):
@@ -75,8 +75,18 @@ def broken_testdir(testdir):
     return testdir
 
 
+def _strip_resource_warnings(lines):
+    # Strip unreliable ResourceWarnings, so no-output assertions on stderr can work.
+    # (https://github.com/pytest-dev/pytest/issues/5088)
+    return [
+        x
+        for x in lines
+        if not x.startswith(("Exception ignored in:", "ResourceWarning"))
+    ]
+
+
 def test_run_without_stepwise(stepwise_testdir):
-    result = stepwise_testdir.runpytest("-v", "--strict", "--fail")
+    result = stepwise_testdir.runpytest("-v", "--strict-markers", "--fail")
 
     result.stdout.fnmatch_lines(["*test_success_before_fail PASSED*"])
     result.stdout.fnmatch_lines(["*test_fail_on_flag FAILED*"])
@@ -85,8 +95,10 @@ def test_run_without_stepwise(stepwise_testdir):
 
 def test_fail_and_continue_with_stepwise(stepwise_testdir):
     # Run the tests with a failing second test.
-    result = stepwise_testdir.runpytest("-v", "--strict", "--stepwise", "--fail")
-    assert not result.stderr.str()
+    result = stepwise_testdir.runpytest(
+        "-v", "--strict-markers", "--stepwise", "--fail"
+    )
+    assert _strip_resource_warnings(result.stderr.lines) == []
 
     stdout = result.stdout.str()
     # Make sure we stop after first failing test.
@@ -95,8 +107,8 @@ def test_fail_and_continue_with_stepwise(stepwise_testdir):
     assert "test_success_after_fail" not in stdout
 
     # "Fix" the test that failed in the last run and run it again.
-    result = stepwise_testdir.runpytest("-v", "--strict", "--stepwise")
-    assert not result.stderr.str()
+    result = stepwise_testdir.runpytest("-v", "--strict-markers", "--stepwise")
+    assert _strip_resource_warnings(result.stderr.lines) == []
 
     stdout = result.stdout.str()
     # Make sure the latest failing test runs and then continues.
@@ -107,9 +119,14 @@ def test_fail_and_continue_with_stepwise(stepwise_testdir):
 
 def test_run_with_skip_option(stepwise_testdir):
     result = stepwise_testdir.runpytest(
-        "-v", "--strict", "--stepwise", "--stepwise-skip", "--fail", "--fail-last"
+        "-v",
+        "--strict-markers",
+        "--stepwise",
+        "--stepwise-skip",
+        "--fail",
+        "--fail-last",
     )
-    assert not result.stderr.str()
+    assert _strip_resource_warnings(result.stderr.lines) == []
 
     stdout = result.stdout.str()
     # Make sure first fail is ignore and second fail stops the test run.
@@ -120,9 +137,9 @@ def test_run_with_skip_option(stepwise_testdir):
 
 
 def test_fail_on_errors(error_testdir):
-    result = error_testdir.runpytest("-v", "--strict", "--stepwise")
+    result = error_testdir.runpytest("-v", "--strict-markers", "--stepwise")
 
-    assert not result.stderr.str()
+    assert _strip_resource_warnings(result.stderr.lines) == []
     stdout = result.stdout.str()
 
     assert "test_error ERROR" in stdout
@@ -131,26 +148,82 @@ def test_fail_on_errors(error_testdir):
 
 def test_change_testfile(stepwise_testdir):
     result = stepwise_testdir.runpytest(
-        "-v", "--strict", "--stepwise", "--fail", "test_a.py"
+        "-v", "--strict-markers", "--stepwise", "--fail", "test_a.py"
     )
-    assert not result.stderr.str()
+    assert _strip_resource_warnings(result.stderr.lines) == []
 
     stdout = result.stdout.str()
     assert "test_fail_on_flag FAILED" in stdout
 
     # Make sure the second test run starts from the beginning, since the
     # test to continue from does not exist in testfile_b.
-    result = stepwise_testdir.runpytest("-v", "--strict", "--stepwise", "test_b.py")
-    assert not result.stderr.str()
+    result = stepwise_testdir.runpytest(
+        "-v", "--strict-markers", "--stepwise", "test_b.py"
+    )
+    assert _strip_resource_warnings(result.stderr.lines) == []
 
     stdout = result.stdout.str()
     assert "test_success PASSED" in stdout
 
 
-def test_stop_on_collection_errors(broken_testdir):
-    result = broken_testdir.runpytest(
-        "-v", "--strict", "--stepwise", "working_testfile.py", "broken_testfile.py"
+@pytest.mark.parametrize("broken_first", [True, False])
+def test_stop_on_collection_errors(broken_testdir, broken_first):
+    """Stop during collection errors. Broken test first or broken test last
+    actually surfaced a bug (#5444), so we test both situations."""
+    files = ["working_testfile.py", "broken_testfile.py"]
+    if broken_first:
+        files.reverse()
+    result = broken_testdir.runpytest("-v", "--strict-markers", "--stepwise", *files)
+    result.stdout.fnmatch_lines("*error during collection*")
+
+
+def test_xfail_handling(testdir, monkeypatch):
+    """Ensure normal xfail is ignored, and strict xfail interrupts the session in sw mode
+
+    (#5547)
+    """
+    monkeypatch.setattr("sys.dont_write_bytecode", True)
+
+    contents = """
+        import pytest
+        def test_a(): pass
+
+        @pytest.mark.xfail(strict={strict})
+        def test_b(): assert {assert_value}
+
+        def test_c(): pass
+        def test_d(): pass
+    """
+    testdir.makepyfile(contents.format(assert_value="0", strict="False"))
+    result = testdir.runpytest("--sw", "-v")
+    result.stdout.fnmatch_lines(
+        [
+            "*::test_a PASSED *",
+            "*::test_b XFAIL *",
+            "*::test_c PASSED *",
+            "*::test_d PASSED *",
+            "* 3 passed, 1 xfailed in *",
+        ]
     )
 
-    stdout = result.stdout.str()
-    assert "errors during collection" in stdout
+    testdir.makepyfile(contents.format(assert_value="1", strict="True"))
+    result = testdir.runpytest("--sw", "-v")
+    result.stdout.fnmatch_lines(
+        [
+            "*::test_a PASSED *",
+            "*::test_b FAILED *",
+            "* Interrupted*",
+            "* 1 failed, 1 passed in *",
+        ]
+    )
+
+    testdir.makepyfile(contents.format(assert_value="0", strict="True"))
+    result = testdir.runpytest("--sw", "-v")
+    result.stdout.fnmatch_lines(
+        [
+            "*::test_b XFAIL *",
+            "*::test_c PASSED *",
+            "*::test_d PASSED *",
+            "* 2 passed, 1 deselected, 1 xfailed in *",
+        ]
+    )

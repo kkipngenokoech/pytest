@@ -28,7 +28,7 @@ To execute it:
 
     $ pytest
     =========================== test session starts ============================
-    platform linux -- Python 3.x.y, pytest-4.x.y, py-1.x.y, pluggy-0.x.y
+    platform linux -- Python 3.x.y, pytest-6.x.y, py-1.x.y, pluggy-0.x.y
     cachedir: $PYTHON_PREFIX/.pytest_cache
     rootdir: $REGENDOC_TMPDIR
     collected 1 item
@@ -44,7 +44,9 @@ To execute it:
     E        +  where 4 = inc(3)
 
     test_sample.py:6: AssertionError
-    ========================= 1 failed in 0.12 seconds =========================
+    ========================= short test summary info ==========================
+    FAILED test_sample.py::test_answer - assert 4 == 5
+    ============================ 1 failed in 0.12s =============================
 
 Due to ``pytest``'s detailed assertion introspection, only plain ``assert`` statements are used.
 See :ref:`Getting Started <getstarted>` for more examples.
@@ -61,7 +63,7 @@ Features
 
 - Can run :ref:`unittest <unittest>` (including trial) and :ref:`nose <noseintegration>` test suites out of the box;
 
-- Python 2.7, Python 3.4+, PyPy 2.3, Jython 2.5 (untested);
+- Python 3.5+ and PyPy 3;
 
 - Rich plugin architecture, with over 315+ `external plugins <http://plugincompat.herokuapp.com>`_ and thriving community;
 
@@ -83,11 +85,44 @@ Changelog
 
 Consult the :ref:`Changelog <changelog>` page for fixes and enhancements of each version.
 
+Support pytest
+--------------
+
+`Open Collective`_ is an online funding platform for open and transparent communities.
+It provide tools to raise money and share your finances in full transparency.
+
+It is the platform of choice for individuals and companies that want to make one-time or
+monthly donations directly to the project.
+
+See more details in the `pytest collective`_.
+
+.. _Open Collective: https://opencollective.com
+.. _pytest collective: https://opencollective.com/pytest
+
+
+pytest for enterprise
+---------------------
+
+Available as part of the Tidelift Subscription.
+
+The maintainers of pytest and thousands of other packages are working with Tidelift to deliver commercial support and
+maintenance for the open source dependencies you use to build your applications.
+Save time, reduce risk, and improve code health, while paying the maintainers of the exact dependencies you use.
+
+`Learn more. <https://tidelift.com/subscription/pkg/pypi-pytest?utm_source=pypi-pytest&utm_medium=referral&utm_campaign=enterprise&utm_term=repo>`_
+
+Security
+^^^^^^^^
+
+pytest has never been associated with a security vulnerability, but in any case, to report a
+security vulnerability please use the `Tidelift security contact <https://tidelift.com/security>`_.
+Tidelift will coordinate the fix and disclosure.
+
 
 License
 -------
 
-Copyright Holger Krekel and others, 2004-2017.
+Copyright Holger Krekel and others, 2004-2020.
 
 Distributed under the terms of the `MIT`_ license, pytest is free and open source software.
 

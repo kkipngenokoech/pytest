@@ -4,20 +4,21 @@ Utilities for truncating assertion output.
 Current default behaviour is to truncate assertion explanations at
 ~8 terminal lines, unless running in "-vv" mode or running on CI.
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
+from typing import List
+from typing import Optional
 
-import six
+from _pytest.nodes import Item
+
 
 DEFAULT_MAX_LINES = 8
 DEFAULT_MAX_CHARS = 8 * 80
 USAGE_MSG = "use '-vv' to show"
 
 
-def truncate_if_required(explanation, item, max_length=None):
+def truncate_if_required(
+    explanation: List[str], item: Item, max_length: Optional[int] = None
+) -> List[str]:
     """
     Truncate this assertion explanation if the given test item is eligible.
     """
@@ -26,7 +27,7 @@ def truncate_if_required(explanation, item, max_length=None):
     return explanation
 
 
-def _should_truncate_item(item):
+def _should_truncate_item(item: Item) -> bool:
     """
     Whether or not this test item is eligible for truncation.
     """
@@ -34,13 +35,17 @@ def _should_truncate_item(item):
     return verbose < 2 and not _running_on_ci()
 
 
-def _running_on_ci():
+def _running_on_ci() -> bool:
     """Check if we're currently running on a CI system."""
     env_vars = ["CI", "BUILD_NUMBER"]
     return any(var in os.environ for var in env_vars)
 
 
-def _truncate_explanation(input_lines, max_lines=None, max_chars=None):
+def _truncate_explanation(
+    input_lines: List[str],
+    max_lines: Optional[int] = None,
+    max_chars: Optional[int] = None,
+) -> List[str]:
     """
     Truncate given list of strings that makes up the assertion explanation.
 
@@ -75,11 +80,11 @@ def _truncate_explanation(input_lines, max_lines=None, max_chars=None):
     else:
         msg += " ({} lines hidden)".format(truncated_line_count)
     msg += ", {}".format(USAGE_MSG)
-    truncated_explanation.extend([six.text_type(""), six.text_type(msg)])
+    truncated_explanation.extend(["", str(msg)])
     return truncated_explanation
 
 
-def _truncate_by_char_count(input_lines, max_chars):
+def _truncate_by_char_count(input_lines: List[str], max_chars: int) -> List[str]:
     # Check if truncation required
     if len("".join(input_lines)) <= max_chars:
         return input_lines

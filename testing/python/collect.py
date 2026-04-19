@@ -1,15 +1,16 @@
-# -*- coding: utf-8 -*-
-import os
 import sys
 import textwrap
+from typing import Any
+from typing import Dict
 
 import _pytest._code
 import pytest
-from _pytest.main import EXIT_NOTESTSCOLLECTED
+from _pytest.config import ExitCode
 from _pytest.nodes import Collector
+from _pytest.pytester import Testdir
 
 
-class TestModule(object):
+class TestModule:
     def test_failing_import(self, testdir):
         modcol = testdir.getmodulecol("import alksdjalskdjalkjals")
         pytest.raises(Collector.CollectError, modcol.collect)
@@ -69,7 +70,7 @@ class TestModule(object):
     def test_invalid_test_module_name(self, testdir):
         a = testdir.mkdir("a")
         a.ensure("test_one.part1.py")
-        result = testdir.runpytest("-rw")
+        result = testdir.runpytest()
         result.stdout.fnmatch_lines(
             [
                 "ImportError while importing test module*test_one.part1*",
@@ -107,22 +108,16 @@ class TestModule(object):
         assert result.ret == 2
 
         stdout = result.stdout.str()
-        for name in ("_pytest", os.path.join("py", "_path")):
-            if verbose == 2:
-                assert name in stdout
-            else:
-                assert name not in stdout
+        if verbose == 2:
+            assert "_pytest" in stdout
+        else:
+            assert "_pytest" not in stdout
 
     def test_show_traceback_import_error_unicode(self, testdir):
         """Check test modules collected which raise ImportError with unicode messages
         are handled properly (#2336).
         """
-        testdir.makepyfile(
-            u"""
-            # -*- coding: utf-8 -*-
-            raise ImportError(u'Something bad happened ☺')
-        """
-        )
+        testdir.makepyfile("raise ImportError('Something bad happened ☺')")
         result = testdir.runpytest()
         result.stdout.fnmatch_lines(
             [
@@ -134,7 +129,7 @@ class TestModule(object):
         assert result.ret == 2
 
 
-class TestClass(object):
+class TestClass:
     def test_class_with_init_warning(self, testdir):
         testdir.makepyfile(
             """
@@ -143,10 +138,27 @@ class TestClass(object):
                     pass
         """
         )
-        result = testdir.runpytest("-rw")
+        result = testdir.runpytest()
         result.stdout.fnmatch_lines(
             [
-                "*cannot collect test class 'TestClass1' because it has a __init__ constructor"
+                "*cannot collect test class 'TestClass1' because it has "
+                "a __init__ constructor (from: test_class_with_init_warning.py)"
+            ]
+        )
+
+    def test_class_with_new_warning(self, testdir):
+        testdir.makepyfile(
+            """
+            class TestClass1(object):
+                def __new__(self):
+                    pass
+        """
+        )
+        result = testdir.runpytest()
+        result.stdout.fnmatch_lines(
+            [
+                "*cannot collect test class 'TestClass1' because it has "
+                "a __new__ constructor (from: test_class_with_new_warning.py)"
             ]
         )
 
@@ -219,7 +231,7 @@ class TestClass(object):
             TestCase = collections.namedtuple('TestCase', ['a'])
         """
         )
-        result = testdir.runpytest("-rw")
+        result = testdir.runpytest()
         result.stdout.fnmatch_lines(
             "*cannot collect test class 'TestCase' "
             "because it has a __new__ constructor*"
@@ -235,10 +247,10 @@ class TestClass(object):
         """
         )
         result = testdir.runpytest()
-        assert result.ret == EXIT_NOTESTSCOLLECTED
+        assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
 
-class TestFunction(object):
+class TestFunction:
     def test_getmodulecollector(self, testdir):
         item = testdir.getitem("def test_func(): pass")
         modcol = item.getparent(pytest.Module)
@@ -270,21 +282,23 @@ class TestFunction(object):
         from _pytest.fixtures import FixtureManager
 
         config = testdir.parseconfigure()
-        session = testdir.Session(config)
+        session = testdir.Session.from_config(config)
         session._fixturemanager = FixtureManager(session)
 
-        return pytest.Function(config=config, parent=session, **kwargs)
+        return pytest.Function.from_parent(parent=session, **kwargs)
 
-    def test_function_equality(self, testdir, tmpdir):
+    def test_function_equality(self, testdir):
         def func1():
             pass
 
         def func2():
             pass
 
-        f1 = self.make_function(testdir, name="name", args=(1,), callobj=func1)
+        f1 = self.make_function(testdir, name="name", callobj=func1)
         assert f1 == f1
-        f2 = self.make_function(testdir, name="name", callobj=func2)
+        f2 = self.make_function(
+            testdir, name="name", callobj=func2, originalname="foobar"
+        )
         assert f1 != f2
 
     def test_repr_produces_actual_test_id(self, testdir):
@@ -481,7 +495,20 @@ class TestFunction(object):
         )
         assert "foo" in keywords[1] and "bar" in keywords[1] and "baz" in keywords[1]
 
-    def test_function_equality_with_callspec(self, testdir, tmpdir):
+    def test_parametrize_with_empty_string_arguments(self, testdir):
+        items = testdir.getitems(
+            """\
+            import pytest
+
+            @pytest.mark.parametrize('v', ('', ' '))
+            @pytest.mark.parametrize('w', ('', ' '))
+            def test(v, w): ...
+            """
+        )
+        names = {item.name for item in items}
+        assert names == {"test[-]", "test[ -]", "test[- ]", "test[ - ]"}
+
+    def test_function_equality_with_callspec(self, testdir):
         items = testdir.getitems(
             """
             import pytest
@@ -497,12 +524,12 @@ class TestFunction(object):
         item = testdir.getitem("def test_func(): raise ValueError")
         config = item.config
 
-        class MyPlugin1(object):
-            def pytest_pyfunc_call(self, pyfuncitem):
+        class MyPlugin1:
+            def pytest_pyfunc_call(self):
                 raise ValueError
 
-        class MyPlugin2(object):
-            def pytest_pyfunc_call(self, pyfuncitem):
+        class MyPlugin2:
+            def pytest_pyfunc_call(self):
                 return True
 
         config.pluginmanager.register(MyPlugin1())
@@ -635,20 +662,47 @@ class TestFunction(object):
         result = testdir.runpytest()
         result.stdout.fnmatch_lines(["* 3 passed in *"])
 
-    def test_function_original_name(self, testdir):
+    def test_function_originalname(self, testdir: Testdir) -> None:
         items = testdir.getitems(
             """
             import pytest
+
             @pytest.mark.parametrize('arg', [1,2])
             def test_func(arg):
                 pass
+
+            def test_no_param():
+                pass
         """
         )
-        assert [x.originalname for x in items] == ["test_func", "test_func"]
+        originalnames = []
+        for x in items:
+            assert isinstance(x, pytest.Function)
+            originalnames.append(x.originalname)
+        assert originalnames == [
+            "test_func",
+            "test_func",
+            "test_no_param",
+        ]
+
+    def test_function_with_square_brackets(self, testdir: Testdir) -> None:
+        """Check that functions with square brackets don't cause trouble."""
+        p1 = testdir.makepyfile(
+            """
+            locals()["test_foo[name]"] = lambda: None
+            """
+        )
+        result = testdir.runpytest("-v", str(p1))
+        result.stdout.fnmatch_lines(
+            [
+                "test_function_with_square_brackets.py::test_foo[[]name[]] PASSED *",
+                "*= 1 passed in *",
+            ]
+        )
 
 
-class TestSorting(object):
-    def test_check_equality(self, testdir):
+class TestSorting:
+    def test_check_equality(self, testdir) -> None:
         modcol = testdir.getmodulecol(
             """
             def test_pass(): pass
@@ -662,8 +716,6 @@ class TestSorting(object):
 
         assert fn1 == fn2
         assert fn1 != modcol
-        if sys.version_info < (3, 0):
-            assert cmp(fn1, fn2) == 0  # NOQA
         assert hash(fn1) == hash(fn2)
 
         fn3 = testdir.collect_by_name(modcol, "test_fail")
@@ -672,10 +724,10 @@ class TestSorting(object):
         assert fn1 != fn3
 
         for fn in fn1, fn2, fn3:
-            assert fn != 3
+            assert fn != 3  # type: ignore[comparison-overlap]
             assert fn != modcol
-            assert fn != [1, 2, 3]
-            assert [1, 2, 3] != fn
+            assert fn != [1, 2, 3]  # type: ignore[comparison-overlap]
+            assert [1, 2, 3] != fn  # type: ignore[comparison-overlap]
             assert modcol != fn
 
     def test_allow_sane_sorting_for_decorators(self, testdir):
@@ -701,7 +753,7 @@ class TestSorting(object):
         assert [item.name for item in colitems] == ["test_b", "test_a"]
 
 
-class TestConftestCustomization(object):
+class TestConftestCustomization:
     def test_pytest_pycollect_module(self, testdir):
         testdir.makeconftest(
             """
@@ -876,12 +928,14 @@ def test_modulecol_roundtrip(testdir):
     assert modcol.name == newcol.name
 
 
-class TestTracebackCutting(object):
+class TestTracebackCutting:
     def test_skip_simple(self):
         with pytest.raises(pytest.skip.Exception) as excinfo:
             pytest.skip("xxx")
         assert excinfo.traceback[-1].frame.code.name == "skip"
         assert excinfo.traceback[-1].ishidden()
+        assert excinfo.traceback[-2].frame.code.name == "test_skip_simple"
+        assert not excinfo.traceback[-2].ishidden()
 
     def test_traceback_argsetup(self, testdir):
         testdir.makeconftest(
@@ -956,7 +1010,7 @@ class TestTracebackCutting(object):
         assert "INTERNALERROR>" not in out
         result.stdout.fnmatch_lines(["*ValueError: fail me*", "* 1 error in *"])
 
-    def test_filter_traceback_generated_code(self):
+    def test_filter_traceback_generated_code(self) -> None:
         """test that filter_traceback() works with the fact that
         _pytest._code.code.Code.path attribute might return an str object.
         In this case, one of the entries on the traceback was produced by
@@ -967,17 +1021,18 @@ class TestTracebackCutting(object):
         from _pytest.python import filter_traceback
 
         try:
-            ns = {}
+            ns = {}  # type: Dict[str, Any]
             exec("def foo(): raise ValueError", ns)
             ns["foo"]()
         except ValueError:
             _, _, tb = sys.exc_info()
 
-        tb = _pytest._code.Traceback(tb)
-        assert isinstance(tb[-1].path, str)
-        assert not filter_traceback(tb[-1])
+        assert tb is not None
+        traceback = _pytest._code.Traceback(tb)
+        assert isinstance(traceback[-1].path, str)
+        assert not filter_traceback(traceback[-1])
 
-    def test_filter_traceback_path_no_longer_valid(self, testdir):
+    def test_filter_traceback_path_no_longer_valid(self, testdir) -> None:
         """test that filter_traceback() works with the fact that
         _pytest._code.code.Code.path attribute might return an str object.
         In this case, one of the files in the traceback no longer exists.
@@ -999,14 +1054,15 @@ class TestTracebackCutting(object):
         except ValueError:
             _, _, tb = sys.exc_info()
 
+        assert tb is not None
         testdir.tmpdir.join("filter_traceback_entry_as_str.py").remove()
-        tb = _pytest._code.Traceback(tb)
-        assert isinstance(tb[-1].path, str)
-        assert filter_traceback(tb[-1])
+        traceback = _pytest._code.Traceback(tb)
+        assert isinstance(traceback[-1].path, str)
+        assert filter_traceback(traceback[-1])
 
 
-class TestReportInfo(object):
-    def test_itemreport_reportinfo(self, testdir, linecomp):
+class TestReportInfo:
+    def test_itemreport_reportinfo(self, testdir):
         testdir.makeconftest(
             """
             import pytest
@@ -1015,7 +1071,7 @@ class TestReportInfo(object):
                     return "ABCDE", 42, "custom"
             def pytest_pycollect_makeitem(collector, name, obj):
                 if name == "test_func":
-                    return MyFunction(name, parent=collector)
+                    return MyFunction.from_parent(name=name, parent=collector)
         """
         )
         item = testdir.getitem("def test_func(): pass")
@@ -1130,54 +1186,8 @@ def test_unorderable_types(testdir):
     """
     )
     result = testdir.runpytest()
-    assert "TypeError" not in result.stdout.str()
-    assert result.ret == EXIT_NOTESTSCOLLECTED
-
-
-def test_collect_functools_partial(testdir):
-    """
-    Test that collection of functools.partial object works, and arguments
-    to the wrapped functions are dealt correctly (see #811).
-    """
-    testdir.makepyfile(
-        """
-        import functools
-        import pytest
-
-        @pytest.fixture
-        def fix1():
-            return 'fix1'
-
-        @pytest.fixture
-        def fix2():
-            return 'fix2'
-
-        def check1(i, fix1):
-            assert i == 2
-            assert fix1 == 'fix1'
-
-        def check2(fix1, i):
-            assert i == 2
-            assert fix1 == 'fix1'
-
-        def check3(fix1, i, fix2):
-            assert i == 2
-            assert fix1 == 'fix1'
-            assert fix2 == 'fix2'
-
-        test_ok_1 = functools.partial(check1, i=2)
-        test_ok_2 = functools.partial(check1, i=2, fix1='fix1')
-        test_ok_3 = functools.partial(check1, 2)
-        test_ok_4 = functools.partial(check2, i=2)
-        test_ok_5 = functools.partial(check3, i=2)
-        test_ok_6 = functools.partial(check3, i=2, fix1='fix1')
-
-        test_fail_1 = functools.partial(check2, 2)
-        test_fail_2 = functools.partial(check3, 2)
-    """
-    )
-    result = testdir.inline_run()
-    result.assertoutcome(passed=6, failed=2)
+    result.stdout.no_fnmatch_line("*TypeError*")
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
 
 @pytest.mark.filterwarnings("default")
@@ -1185,7 +1195,7 @@ def test_dont_collect_non_function_callable(testdir):
     """Test for issue https://github.com/pytest-dev/pytest/issues/331
 
     In this case an INTERNALERROR occurred trying to report the failure of
-    a test like this one because py test failed to get the source lines.
+    a test like this one because pytest failed to get the source lines.
     """
     testdir.makepyfile(
         """
@@ -1199,12 +1209,12 @@ def test_dont_collect_non_function_callable(testdir):
             pass
     """
     )
-    result = testdir.runpytest("-rw")
+    result = testdir.runpytest()
     result.stdout.fnmatch_lines(
         [
             "*collected 1 item*",
             "*test_dont_collect_non_function_callable.py:2: *cannot collect 'test_a' because it is not a function*",
-            "*1 passed, 1 warnings in *",
+            "*1 passed, 1 warning in *",
         ]
     )
 
@@ -1242,15 +1252,28 @@ def test_class_injection_does_not_break_collection(testdir):
 def test_syntax_error_with_non_ascii_chars(testdir):
     """Fix decoding issue while formatting SyntaxErrors during collection (#578)
     """
-    testdir.makepyfile(
-        u"""
-    # -*- coding: UTF-8 -*-
-
-    ☃
-    """
-    )
+    testdir.makepyfile("☃")
     result = testdir.runpytest()
     result.stdout.fnmatch_lines(["*ERROR collecting*", "*SyntaxError*", "*1 error in*"])
+
+
+def test_collect_error_with_fulltrace(testdir):
+    testdir.makepyfile("assert 0")
+    result = testdir.runpytest("--fulltrace")
+    result.stdout.fnmatch_lines(
+        [
+            "collected 0 items / 1 error",
+            "",
+            "*= ERRORS =*",
+            "*_ ERROR collecting test_collect_error_with_fulltrace.py _*",
+            "",
+            ">   assert 0",
+            "E   assert 0",
+            "",
+            "test_collect_error_with_fulltrace.py:1: AssertionError",
+            "*! Interrupted: 1 error during collection !*",
+        ]
+    )
 
 
 def test_skip_duplicates_by_default(testdir):

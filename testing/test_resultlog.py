@@ -1,23 +1,19 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
-
-import py
+from io import StringIO
 
 import _pytest._code
 import pytest
 from _pytest.resultlog import pytest_configure
 from _pytest.resultlog import pytest_unconfigure
 from _pytest.resultlog import ResultLog
+from _pytest.resultlog import resultlog_key
 
 pytestmark = pytest.mark.filterwarnings("ignore:--result-log is deprecated")
 
 
 def test_write_log_entry():
     reslog = ResultLog(None, None)
-    reslog.logfile = py.io.TextIO()
+    reslog.logfile = StringIO()
     reslog.write_log_entry("name", ".", "")
     entry = reslog.logfile.getvalue()
     assert entry[-1] == "\n"
@@ -25,7 +21,7 @@ def test_write_log_entry():
     assert len(entry_lines) == 1
     assert entry_lines[0] == ". name"
 
-    reslog.logfile = py.io.TextIO()
+    reslog.logfile = StringIO()
     reslog.write_log_entry("name", "s", "Skipped")
     entry = reslog.logfile.getvalue()
     assert entry[-1] == "\n"
@@ -34,7 +30,7 @@ def test_write_log_entry():
     assert entry_lines[0] == "s name"
     assert entry_lines[1] == " Skipped"
 
-    reslog.logfile = py.io.TextIO()
+    reslog.logfile = StringIO()
     reslog.write_log_entry("name", "s", "Skipped\n")
     entry = reslog.logfile.getvalue()
     assert entry[-1] == "\n"
@@ -43,7 +39,7 @@ def test_write_log_entry():
     assert entry_lines[0] == "s name"
     assert entry_lines[1] == " Skipped"
 
-    reslog.logfile = py.io.TextIO()
+    reslog.logfile = StringIO()
     longrepr = " tb1\n tb 2\nE tb3\nSome Error"
     reslog.write_log_entry("name", "F", longrepr)
     entry = reslog.logfile.getvalue()
@@ -54,7 +50,7 @@ def test_write_log_entry():
     assert entry_lines[1:] == [" " + line for line in longrepr.splitlines()]
 
 
-class TestWithFunctionIntegration(object):
+class TestWithFunctionIntegration:
     # XXX (hpk) i think that the resultlog plugin should
     # provide a Parser object so that one can remain
     # ignorant regarding formatting details.
@@ -122,7 +118,7 @@ class TestWithFunctionIntegration(object):
             raise ValueError
         except ValueError:
             excinfo = _pytest._code.ExceptionInfo.from_current()
-        reslog = ResultLog(None, py.io.TextIO())
+        reslog = ResultLog(None, StringIO())
         reslog.pytest_internalerror(excinfo.getrepr(style=style))
         entry = reslog.logfile.getvalue()
         entry_lines = entry.splitlines()
@@ -181,20 +177,56 @@ def test_makedir_for_resultlog(testdir, LineMatcher):
     LineMatcher(lines).fnmatch_lines([". *:test_pass"])
 
 
-def test_no_resultlog_on_slaves(testdir):
+def test_no_resultlog_on_workers(testdir):
     config = testdir.parseconfig("-p", "resultlog", "--resultlog=resultlog")
 
-    assert not hasattr(config, "_resultlog")
+    assert resultlog_key not in config._store
     pytest_configure(config)
-    assert hasattr(config, "_resultlog")
+    assert resultlog_key in config._store
     pytest_unconfigure(config)
-    assert not hasattr(config, "_resultlog")
+    assert resultlog_key not in config._store
 
-    config.slaveinput = {}
+    config.workerinput = {}
     pytest_configure(config)
-    assert not hasattr(config, "_resultlog")
+    assert resultlog_key not in config._store
     pytest_unconfigure(config)
-    assert not hasattr(config, "_resultlog")
+    assert resultlog_key not in config._store
+
+
+def test_unknown_teststatus(testdir):
+    """Ensure resultlog correctly handles unknown status from pytest_report_teststatus
+
+    Inspired on pytest-rerunfailures.
+    """
+    testdir.makepyfile(
+        """
+        def test():
+            assert 0
+    """
+    )
+    testdir.makeconftest(
+        """
+        import pytest
+
+        def pytest_report_teststatus(report):
+            if report.outcome == 'rerun':
+                return "rerun", "r", "RERUN"
+
+        @pytest.hookimpl(hookwrapper=True)
+        def pytest_runtest_makereport():
+            res = yield
+            report = res.get_result()
+            if report.when == "call":
+                report.outcome = 'rerun'
+    """
+    )
+    result = testdir.runpytest("--resultlog=result.log")
+    result.stdout.fnmatch_lines(
+        ["test_unknown_teststatus.py r *[[]100%[]]", "* 1 rerun *"]
+    )
+
+    lines = testdir.tmpdir.join("result.log").readlines(cr=0)
+    assert lines[0] == "r test_unknown_teststatus.py::test"
 
 
 def test_failure_issue380(testdir):

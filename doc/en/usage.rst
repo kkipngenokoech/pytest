@@ -33,6 +33,20 @@ Running ``pytest`` can result in six different exit codes:
 :Exit code 4: pytest command line usage error
 :Exit code 5: No tests were collected
 
+They are represented by the :class:`_pytest.config.ExitCode` enum. The exit codes being a part of the public API can be imported and accessed directly using:
+
+.. code-block:: python
+
+    from pytest import ExitCode
+
+.. note::
+
+    If you would like to customize the exit code in some scenarios, specially when
+    no tests are collected, consider using the
+    `pytest-custom_exit_code <https://github.com/yashtodi94/pytest-custom_exit_code>`__
+    plugin.
+
+
 Getting help on version, option names, environment variables
 --------------------------------------------------------------
 
@@ -52,8 +66,8 @@ To stop the testing process after the first (N) failures:
 
 .. code-block:: bash
 
-    pytest -x            # stop after first failure
-    pytest --maxfail=2    # stop after two failures
+    pytest -x           # stop after first failure
+    pytest --maxfail=2  # stop after two failures
 
 .. _select-tests:
 
@@ -80,8 +94,8 @@ Pytest supports several ways to run and select tests from the command-line.
 
     pytest -k "MyClass and not method"
 
-This will run tests which contain names that match the given *string expression*, which can
-include Python operators that use filenames, class names and function names as variables.
+This will run tests which contain names that match the given *string expression* (case-insensitive),
+which can include Python operators that use filenames, class names and function names as variables.
 The example above will run ``TestMyClass.test_something``  but not ``TestMyClass.test_method_simple``.
 
 .. _nodeids:
@@ -155,10 +169,10 @@ option you make sure a trace is shown.
 Detailed summary report
 -----------------------
 
-
-
 The ``-r`` flag can be used to display a "short test summary info" at the end of the test session,
 making it easy in large test suites to get a clear picture of all failures, skips, xfails, etc.
+
+It defaults to ``fE`` to list failures and errors.
 
 Example:
 
@@ -202,7 +216,7 @@ Example:
 
     $ pytest -ra
     =========================== test session starts ============================
-    platform linux -- Python 3.x.y, pytest-4.x.y, py-1.x.y, pluggy-0.x.y
+    platform linux -- Python 3.x.y, pytest-6.x.y, py-1.x.y, pluggy-0.x.y
     cachedir: $PYTHON_PREFIX/.pytest_cache
     rootdir: $REGENDOC_TMPDIR
     collected 6 items
@@ -227,13 +241,13 @@ Example:
 
     test_example.py:14: AssertionError
     ========================= short test summary info ==========================
-    SKIPPED [1] $REGENDOC_TMPDIR/test_example.py:23: skipping this test
+    SKIPPED [1] test_example.py:22: skipping this test
     XFAIL test_example.py::test_xfail
       reason: xfailing this test
     XPASS test_example.py::test_xpass always xfail
-    ERROR test_example.py::test_error
-    FAILED test_example.py::test_fail
-     1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12 seconds
+    ERROR test_example.py::test_error - assert 0
+    FAILED test_example.py::test_fail - assert 0
+    == 1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12s ===
 
 The ``-r`` options accepts a number of characters after it, with ``a`` used
 above meaning "all except passes".
@@ -247,8 +261,12 @@ Here is the full list of available characters that can be used:
  - ``X`` - xpassed
  - ``p`` - passed
  - ``P`` - passed with output
+
+Special characters for (de)selection of groups:
+
  - ``a`` - all except ``pP``
  - ``A`` - all
+ - ``N`` - none, this can be used to display nothing (since ``fE`` is the default)
 
 More than one character can be used, so for example to only see failed and skipped tests, you can execute:
 
@@ -256,7 +274,7 @@ More than one character can be used, so for example to only see failed and skipp
 
     $ pytest -rfs
     =========================== test session starts ============================
-    platform linux -- Python 3.x.y, pytest-4.x.y, py-1.x.y, pluggy-0.x.y
+    platform linux -- Python 3.x.y, pytest-6.x.y, py-1.x.y, pluggy-0.x.y
     cachedir: $PYTHON_PREFIX/.pytest_cache
     rootdir: $REGENDOC_TMPDIR
     collected 6 items
@@ -281,9 +299,9 @@ More than one character can be used, so for example to only see failed and skipp
 
     test_example.py:14: AssertionError
     ========================= short test summary info ==========================
-    FAILED test_example.py::test_fail
-    SKIPPED [1] $REGENDOC_TMPDIR/test_example.py:23: skipping this test
-     1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12 seconds
+    FAILED test_example.py::test_fail - assert 0
+    SKIPPED [1] test_example.py:22: skipping this test
+    == 1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12s ===
 
 Using ``p`` lists the passing tests, whilst ``P`` adds an extra section "PASSES" with those tests that passed but had
 captured output:
@@ -292,7 +310,7 @@ captured output:
 
     $ pytest -rpP
     =========================== test session starts ============================
-    platform linux -- Python 3.x.y, pytest-4.x.y, py-1.x.y, pluggy-0.x.y
+    platform linux -- Python 3.x.y, pytest-6.x.y, py-1.x.y, pluggy-0.x.y
     cachedir: $PYTHON_PREFIX/.pytest_cache
     rootdir: $REGENDOC_TMPDIR
     collected 6 items
@@ -316,13 +334,13 @@ captured output:
     E       assert 0
 
     test_example.py:14: AssertionError
-    ========================= short test summary info ==========================
-    PASSED test_example.py::test_ok
     ================================== PASSES ==================================
     _________________________________ test_ok __________________________________
     --------------------------- Captured stdout call ---------------------------
     ok
-     1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12 seconds
+    ========================= short test summary info ==========================
+    PASSED test_example.py::test_ok
+    == 1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12s ===
 
 .. _pdb-option:
 
@@ -408,7 +426,6 @@ Pytest supports the use of ``breakpoint()`` with the following behaviours:
 Profiling test execution duration
 -------------------------------------
 
-.. versionadded: 2.2
 
 To get a list of the slowest 10 test durations:
 
@@ -417,6 +434,38 @@ To get a list of the slowest 10 test durations:
     pytest --durations=10
 
 By default, pytest will not show test durations that are too small (<0.01s) unless ``-vv`` is passed on the command-line.
+
+
+.. _faulthandler:
+
+Fault Handler
+-------------
+
+.. versionadded:: 5.0
+
+The `faulthandler <https://docs.python.org/3/library/faulthandler.html>`__ standard module
+can be used to dump Python tracebacks on a segfault or after a timeout.
+
+The module is automatically enabled for pytest runs, unless the ``-p no:faulthandler`` is given
+on the command-line.
+
+Also the :confval:`faulthandler_timeout=X<faulthandler_timeout>` configuration option can be used
+to dump the traceback of all threads if a test takes longer than ``X``
+seconds to finish (not available on Windows).
+
+.. note::
+
+    This functionality has been integrated from the external
+    `pytest-faulthandler <https://github.com/pytest-dev/pytest-faulthandler>`__ plugin, with two
+    small differences:
+
+    * To disable it, use ``-p no:faulthandler`` instead of ``--no-faulthandler``: the former
+      can be used with any plugin, so it saves one option.
+
+    * The ``--faulthandler-timeout`` command-line option has become the
+      :confval:`faulthandler_timeout` configuration option. It can still be configured from
+      the command-line using ``-o faulthandler_timeout=X``.
+
 
 Creating JUnitXML format files
 ----------------------------------------------------
@@ -457,13 +506,6 @@ instead, configure the ``junit_duration_report`` option like this:
 
 record_property
 ^^^^^^^^^^^^^^^
-
-
-
-
-   Fixture renamed from ``record_xml_property`` to ``record_property`` as user
-   properties are now available to all reporters.
-   ``record_xml_property`` is now deprecated.
 
 If you want to log additional information for a test, you can use the
 ``record_property`` fixture:
@@ -522,9 +564,7 @@ Will result in:
 
 .. warning::
 
-    ``record_property`` is an experimental feature and may change in the future.
-
-    Also please note that using this feature will break any schema verification.
+    Please note that using this feature will break schema verifications for the latest JUnitXML schema.
     This might be a problem when used with some CI servers.
 
 record_xml_attribute
@@ -587,43 +627,45 @@ Instead, this will add an attribute ``assertions="REQ-1234"`` inside the generat
             </xs:complexType>
         </xs:element>
 
-LogXML: add_global_property
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. warning::
 
+    Please note that using this feature will break schema verifications for the latest JUnitXML schema.
+    This might be a problem when used with some CI servers.
 
+.. _record_testsuite_property example:
 
-If you want to add a properties node in the testsuite level, which may contains properties that are relevant
-to all testcases you can use ``LogXML.add_global_properties``
+record_testsuite_property
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. versionadded:: 4.5
+
+If you want to add a properties node at the test-suite level, which may contains properties
+that are relevant to all tests, you can use the ``record_testsuite_property`` session-scoped fixture:
+
+The ``record_testsuite_property`` session-scoped fixture can be used to add properties relevant
+to all tests.
 
 .. code-block:: python
 
     import pytest
 
 
-    @pytest.fixture(scope="session")
-    def log_global_env_facts(f):
-
-        if pytest.config.pluginmanager.hasplugin("junitxml"):
-            my_junit = getattr(pytest.config, "_xml", None)
-
-        my_junit.add_global_property("ARCH", "PPC")
-        my_junit.add_global_property("STORAGE_TYPE", "CEPH")
+    @pytest.fixture(scope="session", autouse=True)
+    def log_global_env_facts(record_testsuite_property):
+        record_testsuite_property("ARCH", "PPC")
+        record_testsuite_property("STORAGE_TYPE", "CEPH")
 
 
-    @pytest.mark.usefixtures(log_global_env_facts.__name__)
-    def start_and_prepare_env():
-        pass
-
-
-    class TestMe(object):
+    class TestMe:
         def test_foo(self):
             assert True
 
-This will add a property node below the testsuite node to the generated xml:
+The fixture is a callable which receives ``name`` and ``value`` of a ``<property>`` tag
+added at the test-suite level of the generated xml:
 
 .. code-block:: xml
 
-    <testsuite errors="0" failures="0" name="pytest" skips="0" tests="1" time="0.006">
+    <testsuite errors="0" failures="0" name="pytest" skipped="0" tests="1" time="0.006">
       <properties>
         <property name="ARCH" value="PPC"/>
         <property name="STORAGE_TYPE" value="CEPH"/>
@@ -631,21 +673,15 @@ This will add a property node below the testsuite node to the generated xml:
       <testcase classname="test_me.TestMe" file="test_me.py" line="16" name="test_foo" time="0.000243663787842"/>
     </testsuite>
 
-.. warning::
+``name`` must be a string, ``value`` will be converted to a string and properly xml-escaped.
 
-    This is an experimental feature, and its interface might be replaced
-    by something more powerful and general in future versions. The
-    functionality per-se will be kept.
+The generated XML is compatible with the latest ``xunit`` standard, contrary to `record_property`_
+and `record_xml_attribute`_.
+
 
 Creating resultlog format files
 ----------------------------------------------------
 
-
-
-    This option is rarely used and is scheduled for removal in 5.0.
-
-    See `the deprecation docs <https://docs.pytest.org/en/latest/deprecations.html#result-log-result-log>`__
-    for more information.
 
 To create plain-text machine-readable result files you can issue:
 
@@ -655,6 +691,16 @@ To create plain-text machine-readable result files you can issue:
 
 and look at the content at the ``path`` location.  Such files are used e.g.
 by the `PyPy-test`_ web page to show test results over several revisions.
+
+.. warning::
+
+    This option is rarely used and is scheduled for removal in pytest 6.0.
+
+    If you use this option, consider using the new `pytest-reportlog <https://github.com/pytest-dev/pytest-reportlog>`__ plugin instead.
+
+    See `the deprecation docs <https://docs.pytest.org/en/stable/deprecations.html#result-log-result-log>`__
+    for more information.
+
 
 .. _`PyPy-test`: http://buildbot.pypy.org/summary
 
@@ -679,6 +725,11 @@ for example ``-x`` if you only want to send one particular failure.
     pytest --pastebin=all
 
 Currently only pasting to the http://bpaste.net service is implemented.
+
+.. versionchanged:: 5.2
+
+If creating the URL fails for any reason, a warning is generated instead of failing the
+entire test suite.
 
 Early loading plugins
 ---------------------
@@ -716,23 +767,32 @@ Calling pytest from Python code
 
 
 
-You can invoke ``pytest`` from Python code directly::
+You can invoke ``pytest`` from Python code directly:
+
+.. code-block:: python
 
     pytest.main()
 
 this acts as if you would call "pytest" from the command line.
 It will not raise ``SystemExit`` but return the exitcode instead.
-You can pass in options and arguments::
+You can pass in options and arguments:
 
-    pytest.main(['-x', 'mytestdir'])
+.. code-block:: python
 
-You can specify additional plugins to ``pytest.main``::
+    pytest.main(["-x", "mytestdir"])
+
+You can specify additional plugins to ``pytest.main``:
+
+.. code-block:: python
 
     # content of myinvoke.py
     import pytest
-    class MyPlugin(object):
+
+
+    class MyPlugin:
         def pytest_sessionfinish(self):
             print("*** test run reporting finishing")
+
 
     pytest.main(["-qq"], plugins=[MyPlugin()])
 
@@ -761,6 +821,9 @@ hook was invoked:
     E       assert 0
 
     test_example.py:14: AssertionError
+    ========================= short test summary info ==========================
+    FAILED test_example.py::test_fail - assert 0
+    ERROR test_example.py::test_error - assert 0
 
 .. note::
 
@@ -771,5 +834,4 @@ hook was invoked:
     multiple calls to ``pytest.main()`` from the same process (in order to re-run
     tests, for example) is not recommended.
 
-
-.. include:: links.inc
+.. _jenkins: http://jenkins-ci.org/
