@@ -11,8 +11,10 @@ src/main/resources/org/jenkinsci/plugins/xunit/types/model/xsd/junit-10.xsd
 import functools
 import os
 import re
+import socket
 import sys
 import time
+from datetime import datetime
 
 import py
 
