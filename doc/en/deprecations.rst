@@ -19,10 +19,169 @@ Below is a complete list of all pytest features which are considered deprecated.
 :class:`_pytest.warning_types.PytestWarning` or subclasses, which can be filtered using
 :ref:`standard warning filters <warnings>`.
 
+
+The ``pytest._fillfuncargs`` function
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.5
+
+This function was kept for backward compatibility with an older plugin.
+
+It's functionality is not meant to be used directly, but if you must replace
+it, use `function._request._fillfixtures()` instead, though note this is not
+a public API and may break in the future.
+
+
+
+``--no-print-logs`` command-line option
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.4
+
+
+Option ``--no-print-logs`` is deprecated and meant to be removed in a future release. If you use ``--no-print-logs``, please try out ``--show-capture`` and
+provide feedback.
+
+``--show-capture`` command-line option was added in ``pytest 3.5.0`` and allows to specify how to
+display captured output when tests fail: ``no``, ``stdout``, ``stderr``, ``log`` or ``all`` (the default).
+
+
+
+Node Construction changed to ``Node.from_parent``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.4
+
+The construction of nodes now should use the named constructor ``from_parent``.
+This limitation in api surface intends to enable better/simpler refactoring of the collection tree.
+
+This means that instead of :code:`MyItem(name="foo", parent=collector, obj=42)`
+one now has to invoke :code:`MyItem.from_parent(collector, name="foo")`.
+
+Plugins that wish to support older versions of pytest and suppress the warning can use
+`hasattr` to check if `from_parent` exists in that version:
+
+.. code-block:: python
+
+    def pytest_pycollect_makeitem(collector, name, obj):
+        if hasattr(MyItem, "from_parent"):
+            item = MyItem.from_parent(collector, name="foo")
+            item.obj = 42
+            return item
+        else:
+            return MyItem(name="foo", parent=collector, obj=42)
+
+Note that ``from_parent`` should only be called with keyword arguments for the parameters.
+
+
+
+``junit_family`` default value change to "xunit2"
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.2
+
+The default value of ``junit_family`` option will change to ``xunit2`` in pytest 6.0, which
+is an update of the old ``xunit1`` format and is supported by default in modern tools
+that manipulate this type of file (for example, Jenkins, Azure Pipelines, etc.).
+
+Users are recommended to try the new ``xunit2`` format and see if their tooling that consumes the JUnit
+XML file supports it.
+
+To use the new format, update your ``pytest.ini``:
+
+.. code-block:: ini
+
+    [pytest]
+    junit_family=xunit2
+
+If you discover that your tooling does not support the new format, and want to keep using the
+legacy version, set the option to ``legacy`` instead:
+
+.. code-block:: ini
+
+    [pytest]
+    junit_family=legacy
+
+By using ``legacy`` you will keep using the legacy/xunit1 format when upgrading to
+pytest 6.0, where the default format will be ``xunit2``.
+
+In order to let users know about the transition, pytest will issue a warning in case
+the ``--junitxml`` option is given in the command line but ``junit_family`` is not explicitly
+configured in ``pytest.ini``.
+
+Services known to support the ``xunit2`` format:
+
+* `Jenkins <https://www.jenkins.io/>`__ with the `JUnit <https://plugins.jenkins.io/junit>`__ plugin.
+* `Azure Pipelines <https://azure.microsoft.com/en-us/services/devops/pipelines>`__.
+
+
+``funcargnames`` alias for ``fixturenames``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.0
+
+The ``FixtureRequest``, ``Metafunc``, and ``Function`` classes track the names of
+their associated fixtures, with the aptly-named ``fixturenames`` attribute.
+
+Prior to pytest 2.3, this attribute was named ``funcargnames``, and we have kept
+that as an alias since.  It is finally due for removal, as it is often confusing
+in places where we or plugin authors must distinguish between fixture names and
+names supplied by non-fixture things such as ``pytest.mark.parametrize``.
+
+
+Result log (``--result-log``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 4.0
+
+The ``--result-log`` option produces a stream of test reports which can be
+analysed at runtime, but it uses a custom format which requires users to implement their own
+parser.
+
+The  `pytest-reportlog <https://github.com/pytest-dev/pytest-reportlog>`__ plugin provides a ``--report-log`` option, a more standard and extensible alternative, producing
+one JSON object per-line, and should cover the same use cases. Please try it out and provide feedback.
+
+The plan is remove the ``--result-log`` option in pytest 6.0 if ``pytest-reportlog`` proves satisfactory
+to all users and is deemed stable. The ``pytest-reportlog`` plugin might even be merged into the core
+at some point, depending on the plans for the plugins and number of users using it.
+
+TerminalReporter.writer
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. deprecated:: 5.4
+
+The ``TerminalReporter.writer`` attribute has been deprecated and should no longer be used. This
+was inadvertently exposed as part of the public API of that plugin and ties it too much
+with ``py.io.TerminalWriter``.
+
+Plugins that used ``TerminalReporter.writer`` directly should instead use ``TerminalReporter``
+methods that provide the same functionality.
+
+
+Removed Features
+----------------
+
+As stated in our :ref:`backwards-compatibility` policy, deprecated features are removed only in major releases after
+an appropriate period of deprecation has passed.
+
+
+``pytest.config`` global
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. versionremoved:: 5.0
+
+The ``pytest.config`` global object is deprecated.  Instead use
+``request.config`` (via the ``request`` fixture) or if you are a plugin author
+use the ``pytest_configure(config)`` hook. Note that many hooks can also access
+the ``config`` object indirectly, through ``session.config`` or ``item.config`` for example.
+
+
+.. _`raises message deprecated`:
+
 ``"message"`` parameter of ``pytest.raises``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. deprecated:: 4.1
+.. versionremoved:: 5.0
 
 It is a common mistake to think this parameter will match the exception message, while in fact
 it only serves to provide a custom message in case the ``pytest.raises`` check fails. To prevent
@@ -53,22 +212,12 @@ If you still have concerns about this deprecation and future removal, please com
 `issue #3974 <https://github.com/pytest-dev/pytest/issues/3974>`__.
 
 
-``pytest.config`` global
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. deprecated:: 4.1
-
-The ``pytest.config`` global object is deprecated.  Instead use
-``request.config`` (via the ``request`` fixture) or if you are a plugin author
-use the ``pytest_configure(config)`` hook. Note that many hooks can also access
-the ``config`` object indirectly, through ``session.config`` or ``item.config`` for example.
-
 .. _raises-warns-exec:
 
 ``raises`` / ``warns`` with a string as the second argument
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. deprecated:: 4.1
+.. versionremoved:: 5.0
 
 Use the context manager form of these instead.  When necessary, invoke ``exec``
 directly.
@@ -99,26 +248,6 @@ Becomes:
 
 
 
-
-
-
-Result log (``--result-log``)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
-
-The ``--resultlog`` command line option has been deprecated: it is little used
-and there are more modern and better alternatives, for example `pytest-tap <https://tappy.readthedocs.io/en/latest/>`_.
-
-This feature will be effectively removed in pytest 4.0 as the team intends to include a better alternative in the core.
-
-If you have any concerns, please don't hesitate to `open an issue <https://github.com/pytest-dev/pytest/issues>`__.
-
-Removed Features
-----------------
-
-As stated in our :ref:`backwards-compatibility` policy, deprecated features are removed only in major releases after
-an appropriate period of deprecation has passed.
 
 Using ``Class`` in custom Collectors
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -437,7 +566,9 @@ Internal classes accessed through ``Node``
 .. versionremoved:: 4.0
 
 Access of ``Module``, ``Function``, ``Class``, ``Instance``, ``File`` and ``Item`` through ``Node`` instances now issue
-this warning::
+this warning:
+
+.. code-block:: text
 
     usage of Function.Module is deprecated, please use pytest.Module instead
 

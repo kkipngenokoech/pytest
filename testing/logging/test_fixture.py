@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import logging
 
 import pytest
@@ -47,7 +46,7 @@ def test_change_level_undo(testdir):
     )
     result = testdir.runpytest()
     result.stdout.fnmatch_lines(["*log from test1*", "*2 failed in *"])
-    assert "log from test2" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*log from test2*")
 
 
 def test_with_statement(caplog):
@@ -103,15 +102,15 @@ def test_record_tuples(caplog):
 
 def test_unicode(caplog):
     caplog.set_level(logging.INFO)
-    logger.info(u"bū")
+    logger.info("bū")
     assert caplog.records[0].levelname == "INFO"
-    assert caplog.records[0].msg == u"bū"
-    assert u"bū" in caplog.text
+    assert caplog.records[0].msg == "bū"
+    assert "bū" in caplog.text
 
 
 def test_clear(caplog):
     caplog.set_level(logging.INFO)
-    logger.info(u"bū")
+    logger.info("bū")
     assert len(caplog.records)
     assert caplog.text
     caplog.clear()

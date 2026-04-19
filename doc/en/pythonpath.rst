@@ -22,7 +22,9 @@ Consider this file and directory layout::
              |- test_foo.py
 
 
-When executing::
+When executing:
+
+.. code-block:: bash
 
     pytest root/
 
@@ -54,7 +56,9 @@ Consider this file and directory layout::
              |- test_foo.py
 
 
-When executing::
+When executing:
+
+.. code-block:: bash
 
     pytest root/
 
@@ -68,9 +72,13 @@ imported in the global import namespace.
 
 This is also discussed in details in :ref:`test discovery`.
 
+.. _`pytest vs python -m pytest`:
+
 Invoking ``pytest`` versus ``python -m pytest``
 -----------------------------------------------
 
-Running pytest with ``python -m pytest [...]`` instead of ``pytest [...]`` yields nearly
-equivalent behaviour, except that the former call will add the current directory to ``sys.path``.
+Running pytest with ``pytest [...]`` instead of ``python -m pytest [...]`` yields nearly
+equivalent behaviour, except that the latter will add the current directory to ``sys.path``, which
+is standard ``python`` behavior.
+
 See also :ref:`cmdline`.

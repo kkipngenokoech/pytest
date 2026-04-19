@@ -20,8 +20,6 @@ which were registered by installed plugins.
 Initialization: determining rootdir and inifile
 -----------------------------------------------
 
-
-
 pytest determines a ``rootdir`` for each test run which depends on
 the command line arguments (specified test files, paths) and on
 the existence of *ini-files*.  The determined ``rootdir`` and *ini-file* are
@@ -30,17 +28,17 @@ printed as part of the pytest header during startup.
 Here's a summary what ``pytest`` uses ``rootdir`` for:
 
 * Construct *nodeids* during collection; each test is assigned
-  a unique *nodeid* which is rooted at the ``rootdir`` and takes in account full path,
-  class name, function name and parametrization (if any).
+  a unique *nodeid* which is rooted at the ``rootdir`` and takes into account
+  the full path, class name, function name and parametrization (if any).
 
 * Is used by plugins as a stable location to store project/test run specific information;
   for example, the internal :ref:`cache <cache>` plugin creates a ``.pytest_cache`` subdirectory
   in ``rootdir`` to store its cross-test run state.
 
-Important to emphasize that ``rootdir`` is **NOT** used to modify ``sys.path``/``PYTHONPATH`` or
+``rootdir`` is **NOT** used to modify ``sys.path``/``PYTHONPATH`` or
 influence how modules are imported. See :ref:`pythonpath` for more details.
 
-``--rootdir=path`` command-line option can be used to force a specific directory.
+The ``--rootdir=path`` command-line option can be used to force a specific directory.
 The directory passed may contain environment variables when it is used in conjunction
 with ``addopts`` in a ``pytest.ini`` file.
 
@@ -107,8 +105,8 @@ check for ini-files as follows:
 
     # first look for pytest.ini files
     path/pytest.ini
-    path/setup.cfg  # must also contain [tool:pytest] section to match
     path/tox.ini    # must also contain [pytest] section to match
+    path/setup.cfg  # must also contain [tool:pytest] section to match
     pytest.ini
     ... # all the way down to the root
 
@@ -134,8 +132,11 @@ progress output, you can write it into a configuration file:
 .. code-block:: ini
 
     # content of pytest.ini or tox.ini
-    # setup.cfg files should use [tool:pytest] section instead
     [pytest]
+    addopts = -ra -q
+
+    # content of setup.cfg
+    [tool:pytest]
     addopts = -ra -q
 
 Alternatively, you can set a ``PYTEST_ADDOPTS`` environment variable to add command

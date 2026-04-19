@@ -19,7 +19,7 @@ Branches
 
 We have two long term branches:
 
-* ``master``: contains the code for the next bugfix release.
+* ``master``: contains the code for the next bug-fix release.
 * ``features``: contains the code with new features for the next minor release.
 
 The official repository usually does not contain topic branches, developers and contributors should create topic
@@ -57,4 +57,4 @@ Issues created at those events should have other relevant labels added as well.
 Those labels should be removed after they are no longer relevant.
 
 
-.. include:: ../../HOWTORELEASE.rst
+.. include:: ../../RELEASING.rst
