@@ -54,6 +54,14 @@ def pytest_addoption(parser):
         dest="help",
         help="show help message and configuration info",
     )
+    group.addoption(
+        "--fixtures",
+        action="store_true",
+        dest="showfixtures",
+        default=False,
+        help="show available fixtures, sorted by plugin appearance "
+        "(fixtures with leading '_' are only shown with '-v')",
+    )
     group._addoption(
         "-p",
         action="append",
@@ -138,6 +146,11 @@ def pytest_cmdline_main(config):
         showhelp(config)
         config._ensure_unconfigure()
         return 0
+    elif config.option.showfixtures:
+        config._do_configure()
+        showfixtures(config)
+        config._ensure_unconfigure()
+        return 0
 
 
 def showhelp(config):
@@ -199,6 +212,70 @@ def getpluginversioninfo(config):
             content = "%s-%s at %s" % (dist.project_name, dist.version, loc)
             lines.append("  " + content)
     return lines
+
+
+def showfixtures(config):
+    from _pytest.fixtures import getfixturemarker
+    
+    reporter = config.pluginmanager.get_plugin("terminalreporter")
+    tw = reporter._tw
+    verbose = config.option.verbose
+    
+    fm = config.pluginmanager.get_plugin("funcmanage")
+    if fm is None:
+        return
+    
+    available = []
+    seen = set()
+    
+    for argname, fixturedefs in fm._arg2fixturedefs.items():
+        if argname in seen:
+            continue
+        seen.add(argname)
+        
+        if not verbose and argname.startswith("_"):
+            continue
+            
+        for fixturedef in fixturedefs:
+            loc = getlocation(fixturedef.func, config.rootdir)
+            doc = fixturedef.func.__doc__ or ""
+            if doc:
+                doc = doc.strip()
+            
+            # Get fixture scope
+            scope = fixturedef.scope
+            
+            available.append((len(argname), argname, scope, loc, doc))
+    
+    available.sort()
+    
+    if available:
+        tw.line()
+        tw.sep("-", "fixtures defined from %s" % (config.rootdir,))
+        
+        for _, argname, scope, loc, doc in available:
+            tw.line()
+            tw.write("%s [%s]" % (argname, scope), bold=True)
+            if loc:
+                tw.write(" -- %s" % loc)
+            tw.line()
+            if doc:
+                tw.line("    " + doc)
+
+
+def getlocation(function, curdir):
+    import inspect
+    try:
+        fn = py.path.local(inspect.getfile(function))
+    except TypeError:
+        return ""
+    try:
+        lineno = function.__code__.co_firstlineno
+    except AttributeError:
+        lineno = "?"
+    if fn.relto(curdir):
+        fn = fn.relto(curdir)
+    return "%s:%s" % (fn, lineno)
 
 
 def pytest_report_header(config):
