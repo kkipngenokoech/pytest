@@ -1,8 +1,3 @@
-# encoding: UTF-8
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 import sys
 import types
@@ -10,7 +5,7 @@ import types
 import pytest
 from _pytest.config import PytestPluginManager
 from _pytest.config.exceptions import UsageError
-from _pytest.main import EXIT_NOTESTSCOLLECTED
+from _pytest.main import ExitCode
 from _pytest.main import Session
 
 
@@ -19,7 +14,7 @@ def pytestpm():
     return PytestPluginManager()
 
 
-class TestPytestPluginInteractions(object):
+class TestPytestPluginInteractions:
     def test_addhooks_conftestplugin(self, testdir, _config_for_test):
         testdir.makepyfile(
             newhooks="""
@@ -75,7 +70,7 @@ class TestPytestPluginInteractions(object):
         config = testdir.parseconfig()
         values = []
 
-        class A(object):
+        class A:
             def pytest_configure(self, config):
                 values.append(self)
 
@@ -95,11 +90,11 @@ class TestPytestPluginInteractions(object):
         pytestpm = _config_for_test.pluginmanager  # fully initialized with plugins
         saveindent = []
 
-        class api1(object):
+        class api1:
             def pytest_plugin_registered(self):
                 saveindent.append(pytestpm.trace.root.indent)
 
-        class api2(object):
+        class api2:
             def pytest_plugin_registered(self):
                 saveindent.append(pytestpm.trace.root.indent)
                 raise ValueError()
@@ -154,12 +149,11 @@ def test_importplugin_error_message(testdir, pytestpm):
     """
     testdir.syspathinsert(testdir.tmpdir)
     testdir.makepyfile(
-        qwe="""
-        # encoding: UTF-8
+        qwe="""\
         def test_traceback():
-            raise ImportError(u'Not possible to import: ☺')
+            raise ImportError('Not possible to import: ☺')
         test_traceback()
-    """
+        """
     )
     with pytest.raises(ImportError) as excinfo:
         pytestpm.import_plugin("qwe")
@@ -170,7 +164,7 @@ def test_importplugin_error_message(testdir, pytestpm):
     assert "in test_traceback" in str(excinfo.traceback[-1])
 
 
-class TestPytestPluginManager(object):
+class TestPytestPluginManager:
     def test_register_imported_modules(self):
         pm = PytestPluginManager()
         mod = types.ModuleType("x.y.pytest_hello")
@@ -233,7 +227,7 @@ class TestPytestPluginManager(object):
         p.copy(p.dirpath("skipping2.py"))
         monkeypatch.setenv("PYTEST_PLUGINS", "skipping2")
         result = testdir.runpytest("-rw", "-p", "skipping1", syspathinsert=True)
-        assert result.ret == EXIT_NOTESTSCOLLECTED
+        assert result.ret == ExitCode.NO_TESTS_COLLECTED
         result.stdout.fnmatch_lines(
             ["*skipped plugin*skipping1*hello*", "*skipped plugin*skipping2*hello*"]
         )
@@ -300,7 +294,7 @@ class TestPytestPluginManager(object):
             pytestpm.consider_conftest(mod)
 
 
-class TestPytestPluginManagerBootstrapming(object):
+class TestPytestPluginManagerBootstrapming:
     def test_preparse_args(self, pytestpm):
         pytest.raises(
             ImportError, lambda: pytestpm.consider_preparse(["xyz", "-p", "hello123"])

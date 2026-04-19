@@ -1,26 +1,20 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
+import os
 import sys
 import textwrap
-
-import attr
+from pathlib import Path
 
 import _pytest._code
 import pytest
+from _pytest.compat import importlib_metadata
 from _pytest.config import _iter_rewritable_modules
 from _pytest.config.exceptions import UsageError
 from _pytest.config.findpaths import determine_setup
 from _pytest.config.findpaths import get_common_ancestor
 from _pytest.config.findpaths import getcfg
-from _pytest.main import EXIT_NOTESTSCOLLECTED
-from _pytest.main import EXIT_OK
-from _pytest.main import EXIT_TESTSFAILED
-from _pytest.main import EXIT_USAGEERROR
+from _pytest.main import ExitCode
 
 
-class TestParseIni(object):
+class TestParseIni:
     @pytest.mark.parametrize(
         "section, filename", [("pytest", "pytest.ini"), ("tool:pytest", "setup.cfg")]
     )
@@ -129,6 +123,12 @@ class TestParseIni(object):
         config = testdir.parseconfigure(sub)
         assert config.getini("minversion") == "2.0"
 
+    def test_ini_parse_error(self, testdir):
+        testdir.tmpdir.join("pytest.ini").write("addopts = -x")
+        result = testdir.runpytest()
+        assert result.ret != 0
+        result.stderr.fnmatch_lines(["ERROR: *pytest.ini:1: no section header defined"])
+
     @pytest.mark.xfail(reason="probably not needed")
     def test_confcutdir(self, testdir):
         sub = testdir.mkdir("sub")
@@ -143,7 +143,7 @@ class TestParseIni(object):
         assert result.ret == 0
 
 
-class TestConfigCmdlineParsing(object):
+class TestConfigCmdlineParsing:
     def test_parsing_again_fails(self, testdir):
         config = testdir.parseconfig()
         pytest.raises(AssertionError, lambda: config.parse([]))
@@ -193,10 +193,10 @@ class TestConfigCmdlineParsing(object):
 
         temp_ini_file = normpath(str(temp_ini_file))
         ret = pytest.main(["-c", temp_ini_file])
-        assert ret == _pytest.main.EXIT_OK
+        assert ret == ExitCode.OK
 
 
-class TestConfigAPI(object):
+class TestConfigAPI:
     def test_config_trace(self, testdir):
         config = testdir.parseconfig()
         values = []
@@ -217,12 +217,9 @@ class TestConfigAPI(object):
             assert config.getoption(x) == "this"
         pytest.raises(ValueError, config.getoption, "qweqwe")
 
-    @pytest.mark.skipif("sys.version_info[0] < 3")
     def test_config_getoption_unicode(self, testdir):
         testdir.makeconftest(
             """
-            from __future__ import unicode_literals
-
             def pytest_addoption(parser):
                 parser.addoption('--hello', type=str)
         """
@@ -435,7 +432,7 @@ class TestConfigAPI(object):
         assert list(_iter_rewritable_modules(["/".join(names)])) == expected
 
 
-class TestConfigFromdictargs(object):
+class TestConfigFromdictargs:
     def test_basic_behavior(self, _sys_snapshot):
         from _pytest.config import Config
 
@@ -450,7 +447,7 @@ class TestConfigFromdictargs(object):
         assert config.option.capture == "no"
         assert config.args == args
 
-    def test_origargs(self, _sys_snapshot):
+    def test_invocation_params_args(self, _sys_snapshot):
         """Show that fromdictargs can handle args in their "orig" format"""
         from _pytest.config import Config
 
@@ -459,7 +456,7 @@ class TestConfigFromdictargs(object):
 
         config = Config.fromdictargs(option_dict, args)
         assert config.args == ["a", "b"]
-        assert config._origargs == args
+        assert config.invocation_params.args == args
         assert config.option.verbose == 4
         assert config.option.capture == "no"
 
@@ -531,32 +528,26 @@ def test_options_on_small_file_do_not_blow_up(testdir):
 
 
 def test_preparse_ordering_with_setuptools(testdir, monkeypatch):
-    pkg_resources = pytest.importorskip("pkg_resources")
     monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
 
-    def my_iter(group, name=None):
-        assert group == "pytest11"
+    class EntryPoint:
+        name = "mytestplugin"
+        group = "pytest11"
 
-        class Dist(object):
-            project_name = "spam"
-            version = "1.0"
+        def load(self):
+            class PseudoPlugin:
+                x = 42
 
-            def _get_metadata(self, name):
-                return ["foo.txt,sha256=abc,123"]
+            return PseudoPlugin()
 
-        class EntryPoint(object):
-            name = "mytestplugin"
-            dist = Dist()
+    class Dist:
+        files = ()
+        entry_points = (EntryPoint(),)
 
-            def load(self):
-                class PseudoPlugin(object):
-                    x = 42
+    def my_dists():
+        return (Dist,)
 
-                return PseudoPlugin()
-
-        return iter([EntryPoint()])
-
-    monkeypatch.setattr(pkg_resources, "iter_entry_points", my_iter)
+    monkeypatch.setattr(importlib_metadata, "distributions", my_dists)
     testdir.makeconftest(
         """
         pytest_plugins = "mytestplugin",
@@ -569,60 +560,73 @@ def test_preparse_ordering_with_setuptools(testdir, monkeypatch):
 
 
 def test_setuptools_importerror_issue1479(testdir, monkeypatch):
-    pkg_resources = pytest.importorskip("pkg_resources")
     monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
 
-    def my_iter(group, name=None):
-        assert group == "pytest11"
+    class DummyEntryPoint:
+        name = "mytestplugin"
+        group = "pytest11"
 
-        class Dist(object):
-            project_name = "spam"
-            version = "1.0"
+        def load(self):
+            raise ImportError("Don't hide me!")
 
-            def _get_metadata(self, name):
-                return ["foo.txt,sha256=abc,123"]
+    class Distribution:
+        version = "1.0"
+        files = ("foo.txt",)
+        entry_points = (DummyEntryPoint(),)
 
-        class EntryPoint(object):
-            name = "mytestplugin"
-            dist = Dist()
+    def distributions():
+        return (Distribution(),)
 
-            def load(self):
-                raise ImportError("Don't hide me!")
-
-        return iter([EntryPoint()])
-
-    monkeypatch.setattr(pkg_resources, "iter_entry_points", my_iter)
+    monkeypatch.setattr(importlib_metadata, "distributions", distributions)
     with pytest.raises(ImportError):
         testdir.parseconfig()
 
 
+def test_importlib_metadata_broken_distribution(testdir, monkeypatch):
+    """Integration test for broken distributions with 'files' metadata being None (#5389)"""
+    monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
+
+    class DummyEntryPoint:
+        name = "mytestplugin"
+        group = "pytest11"
+
+        def load(self):
+            return object()
+
+    class Distribution:
+        version = "1.0"
+        files = None
+        entry_points = (DummyEntryPoint(),)
+
+    def distributions():
+        return (Distribution(),)
+
+    monkeypatch.setattr(importlib_metadata, "distributions", distributions)
+    testdir.parseconfig()
+
+
 @pytest.mark.parametrize("block_it", [True, False])
 def test_plugin_preparse_prevents_setuptools_loading(testdir, monkeypatch, block_it):
-    pkg_resources = pytest.importorskip("pkg_resources")
     monkeypatch.delenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", raising=False)
 
     plugin_module_placeholder = object()
 
-    def my_iter(group, name=None):
-        assert group == "pytest11"
+    class DummyEntryPoint:
+        name = "mytestplugin"
+        group = "pytest11"
 
-        class Dist(object):
-            project_name = "spam"
-            version = "1.0"
+        def load(self):
+            return plugin_module_placeholder
 
-            def _get_metadata(self, name):
-                return ["foo.txt,sha256=abc,123"]
+    class Distribution:
+        version = "1.0"
+        files = ("foo.txt",)
+        entry_points = (DummyEntryPoint(),)
 
-        class EntryPoint(object):
-            name = "mytestplugin"
-            dist = Dist()
+    def distributions():
+        return (Distribution(),)
 
-            def load(self):
-                return plugin_module_placeholder
-
-        return iter([EntryPoint()])
-
-    monkeypatch.setattr(pkg_resources, "iter_entry_points", my_iter)
+    monkeypatch.setattr(importlib_metadata, "distributions", distributions)
     args = ("-p", "no:mytestplugin") if block_it else ()
     config = testdir.parseconfig(*args)
     config.pluginmanager.import_plugin("mytestplugin")
@@ -639,37 +643,26 @@ def test_plugin_preparse_prevents_setuptools_loading(testdir, monkeypatch, block
     "parse_args,should_load", [(("-p", "mytestplugin"), True), ((), False)]
 )
 def test_disable_plugin_autoload(testdir, monkeypatch, parse_args, should_load):
-    pkg_resources = pytest.importorskip("pkg_resources")
-
-    def my_iter(group, name=None):
-        assert group == "pytest11"
-        assert name == "mytestplugin"
-        return iter([DummyEntryPoint()])
-
-    @attr.s
-    class DummyEntryPoint(object):
-        name = "mytestplugin"
+    class DummyEntryPoint:
+        project_name = name = "mytestplugin"
+        group = "pytest11"
         version = "1.0"
-
-        @property
-        def project_name(self):
-            return self.name
 
         def load(self):
             return sys.modules[self.name]
 
-        @property
-        def dist(self):
-            return self
+    class Distribution:
+        entry_points = (DummyEntryPoint(),)
+        files = ()
 
-        def _get_metadata(self, *args):
-            return []
-
-    class PseudoPlugin(object):
+    class PseudoPlugin:
         x = 42
 
+    def distributions():
+        return (Distribution(),)
+
     monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
-    monkeypatch.setattr(pkg_resources, "iter_entry_points", my_iter)
+    monkeypatch.setattr(importlib_metadata, "distributions", distributions)
     monkeypatch.setitem(sys.modules, "mytestplugin", PseudoPlugin())
     config = testdir.parseconfig(*parse_args)
     has_loaded = config.pluginmanager.get_plugin("mytestplugin") is not None
@@ -737,7 +730,7 @@ def test_consider_args_after_options_for_rootdir(testdir, args):
 @pytest.mark.skipif("sys.platform == 'win32'")
 def test_toolongargs_issue224(testdir):
     result = testdir.runpytest("-m", "hello" * 500)
-    assert result.ret == EXIT_NOTESTSCOLLECTED
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
 
 def test_config_in_subdirectory_colon_command_line_issue2148(testdir):
@@ -755,10 +748,10 @@ def test_config_in_subdirectory_colon_command_line_issue2148(testdir):
         **{
             "conftest": conftest_source,
             "subdir/conftest": conftest_source,
-            "subdir/test_foo": """
+            "subdir/test_foo": """\
             def test_foo(pytestconfig):
                 assert pytestconfig.getini('foo') == 'subdir'
-        """,
+            """,
         }
     )
 
@@ -774,7 +767,7 @@ def test_notify_exception(testdir, capfd):
     out, err = capfd.readouterr()
     assert "ValueError" in err
 
-    class A(object):
+    class A:
         def pytest_internalerror(self, excrepr):
             return True
 
@@ -791,10 +784,16 @@ def test_notify_exception(testdir, capfd):
     assert "ValueError" in err
 
 
+def test_no_terminal_discovery_error(testdir):
+    testdir.makepyfile("raise TypeError('oops!')")
+    result = testdir.runpytest("-p", "no:terminal", "--collect-only")
+    assert result.ret == ExitCode.INTERRUPTED
+
+
 def test_load_initial_conftest_last_ordering(testdir, _config_for_test):
     pm = _config_for_test.pluginmanager
 
-    class My(object):
+    class My:
         def pytest_load_initial_conftests(self):
             pass
 
@@ -832,15 +831,15 @@ def test_collect_pytest_prefix_bug_integration(testdir):
 def test_collect_pytest_prefix_bug(pytestconfig):
     """Ensure we collect only actual functions from conftest files (#3775)"""
 
-    class Dummy(object):
-        class pytest_something(object):
+    class Dummy:
+        class pytest_something:
             pass
 
     pm = pytestconfig.pluginmanager
     assert pm.parse_hookimpl_opts(Dummy(), "pytest_something") is None
 
 
-class TestRootdir(object):
+class TestRootdir:
     def test_simple_noini(self, tmpdir):
         assert get_common_ancestor([tmpdir]) == tmpdir
         a = tmpdir.mkdir("a")
@@ -898,7 +897,7 @@ class TestRootdir(object):
         assert rootdir == tmpdir
 
 
-class TestOverrideIniArgs(object):
+class TestOverrideIniArgs:
     @pytest.mark.parametrize("name", "setup.cfg tox.ini pytest.ini".split())
     def test_override_ini_names(self, testdir, name):
         section = "[pytest]" if name != "setup.cfg" else "[tool:pytest]"
@@ -1097,7 +1096,7 @@ class TestOverrideIniArgs(object):
                 % (testdir.request.config._parser.optparser.prog,)
             ]
         )
-        assert result.ret == _pytest.main.EXIT_USAGEERROR
+        assert result.ret == _pytest.main.ExitCode.USAGE_ERROR
 
     def test_override_ini_does_not_contain_paths(self, _config_for_test, _sys_snapshot):
         """Check that -o no longer swallows all options after it (#3103)"""
@@ -1186,13 +1185,13 @@ def test_help_and_version_after_argument_error(testdir):
     )
     # Does not display full/default help.
     assert "to see available markers type: pytest --markers" not in result.stdout.lines
-    assert result.ret == EXIT_USAGEERROR
+    assert result.ret == ExitCode.USAGE_ERROR
 
     result = testdir.runpytest("--version")
     result.stderr.fnmatch_lines(
         ["*pytest*{}*imported from*".format(pytest.__version__)]
     )
-    assert result.ret == EXIT_USAGEERROR
+    assert result.ret == ExitCode.USAGE_ERROR
 
 
 def test_config_does_not_load_blocked_plugin_from_args(testdir):
@@ -1200,11 +1199,34 @@ def test_config_does_not_load_blocked_plugin_from_args(testdir):
     p = testdir.makepyfile("def test(capfd): pass")
     result = testdir.runpytest(str(p), "-pno:capture")
     result.stdout.fnmatch_lines(["E       fixture 'capfd' not found"])
-    assert result.ret == EXIT_TESTSFAILED
+    assert result.ret == ExitCode.TESTS_FAILED
 
     result = testdir.runpytest(str(p), "-pno:capture", "-s")
     result.stderr.fnmatch_lines(["*: error: unrecognized arguments: -s"])
-    assert result.ret == EXIT_USAGEERROR
+    assert result.ret == ExitCode.USAGE_ERROR
+
+
+def test_invocation_args(testdir):
+    """Ensure that Config.invocation_* arguments are correctly defined"""
+
+    class DummyPlugin:
+        pass
+
+    p = testdir.makepyfile("def test(): pass")
+    plugin = DummyPlugin()
+    rec = testdir.inline_run(p, "-v", plugins=[plugin])
+    calls = rec.getcalls("pytest_runtest_protocol")
+    assert len(calls) == 1
+    call = calls[0]
+    config = call.item.config
+
+    assert config.invocation_params.args == [p, "-v"]
+    assert config.invocation_params.dir == Path(str(testdir.tmpdir))
+
+    plugins = config.invocation_params.plugins
+    assert len(plugins) == 2
+    assert plugins[0] is plugin
+    assert type(plugins[1]).__name__ == "Collect"  # installed by testdir.inline_run()
 
 
 @pytest.mark.parametrize(
@@ -1228,14 +1250,162 @@ def test_config_blocked_default_plugins(testdir, plugin):
 
     p = testdir.makepyfile("def test(): pass")
     result = testdir.runpytest(str(p), "-pno:%s" % plugin)
-    assert result.ret == EXIT_OK
+
+    if plugin == "python":
+        assert result.ret == ExitCode.USAGE_ERROR
+        result.stderr.fnmatch_lines(
+            [
+                "ERROR: not found: */test_config_blocked_default_plugins.py",
+                "(no name '*/test_config_blocked_default_plugins.py' in any of [])",
+            ]
+        )
+        return
+
+    assert result.ret == ExitCode.OK
     if plugin != "terminal":
         result.stdout.fnmatch_lines(["* 1 passed in *"])
 
     p = testdir.makepyfile("def test(): assert 0")
     result = testdir.runpytest(str(p), "-pno:%s" % plugin)
-    assert result.ret == EXIT_TESTSFAILED
+    assert result.ret == ExitCode.TESTS_FAILED
     if plugin != "terminal":
         result.stdout.fnmatch_lines(["* 1 failed in *"])
     else:
         assert result.stdout.lines == [""]
+
+
+class TestSetupCfg:
+    def test_pytest_setup_cfg_unsupported(self, testdir):
+        testdir.makefile(
+            ".cfg",
+            setup="""
+            [pytest]
+            addopts = --verbose
+        """,
+        )
+        with pytest.raises(pytest.fail.Exception):
+            testdir.runpytest()
+
+    def test_pytest_custom_cfg_unsupported(self, testdir):
+        testdir.makefile(
+            ".cfg",
+            custom="""
+            [pytest]
+            addopts = --verbose
+        """,
+        )
+        with pytest.raises(pytest.fail.Exception):
+            testdir.runpytest("-c", "custom.cfg")
+
+
+class TestPytestPluginsVariable:
+    def test_pytest_plugins_in_non_top_level_conftest_unsupported(self, testdir):
+        testdir.makepyfile(
+            **{
+                "subdirectory/conftest.py": """
+            pytest_plugins=['capture']
+        """
+            }
+        )
+        testdir.makepyfile(
+            """
+            def test_func():
+                pass
+        """
+        )
+        res = testdir.runpytest()
+        assert res.ret == 2
+        msg = "Defining 'pytest_plugins' in a non-top-level conftest is no longer supported"
+        res.stdout.fnmatch_lines(
+            [
+                "*{msg}*".format(msg=msg),
+                "*subdirectory{sep}conftest.py*".format(sep=os.sep),
+            ]
+        )
+
+    @pytest.mark.parametrize("use_pyargs", [True, False])
+    def test_pytest_plugins_in_non_top_level_conftest_unsupported_pyargs(
+        self, testdir, use_pyargs
+    ):
+        """When using --pyargs, do not emit the warning about non-top-level conftest warnings (#4039, #4044)"""
+
+        files = {
+            "src/pkg/__init__.py": "",
+            "src/pkg/conftest.py": "",
+            "src/pkg/test_root.py": "def test(): pass",
+            "src/pkg/sub/__init__.py": "",
+            "src/pkg/sub/conftest.py": "pytest_plugins=['capture']",
+            "src/pkg/sub/test_bar.py": "def test(): pass",
+        }
+        testdir.makepyfile(**files)
+        testdir.syspathinsert(testdir.tmpdir.join("src"))
+
+        args = ("--pyargs", "pkg") if use_pyargs else ()
+        res = testdir.runpytest(*args)
+        assert res.ret == (0 if use_pyargs else 2)
+        msg = (
+            msg
+        ) = "Defining 'pytest_plugins' in a non-top-level conftest is no longer supported"
+        if use_pyargs:
+            assert msg not in res.stdout.str()
+        else:
+            res.stdout.fnmatch_lines(["*{msg}*".format(msg=msg)])
+
+    def test_pytest_plugins_in_non_top_level_conftest_unsupported_no_top_level_conftest(
+        self, testdir
+    ):
+        subdirectory = testdir.tmpdir.join("subdirectory")
+        subdirectory.mkdir()
+        testdir.makeconftest(
+            """
+            pytest_plugins=['capture']
+        """
+        )
+        testdir.tmpdir.join("conftest.py").move(subdirectory.join("conftest.py"))
+
+        testdir.makepyfile(
+            """
+            def test_func():
+                pass
+        """
+        )
+
+        res = testdir.runpytest_subprocess()
+        assert res.ret == 2
+        msg = "Defining 'pytest_plugins' in a non-top-level conftest is no longer supported"
+        res.stdout.fnmatch_lines(
+            [
+                "*{msg}*".format(msg=msg),
+                "*subdirectory{sep}conftest.py*".format(sep=os.sep),
+            ]
+        )
+
+    def test_pytest_plugins_in_non_top_level_conftest_unsupported_no_false_positives(
+        self, testdir
+    ):
+        subdirectory = testdir.tmpdir.join("subdirectory")
+        subdirectory.mkdir()
+        testdir.makeconftest(
+            """
+            pass
+        """
+        )
+        testdir.tmpdir.join("conftest.py").move(subdirectory.join("conftest.py"))
+
+        testdir.makeconftest(
+            """
+            import warnings
+            warnings.filterwarnings('always', category=DeprecationWarning)
+            pytest_plugins=['capture']
+        """
+        )
+        testdir.makepyfile(
+            """
+            def test_func():
+                pass
+        """
+        )
+        res = testdir.runpytest_subprocess()
+        assert res.ret == 0
+        msg = "Defining 'pytest_plugins' in a non-top-level conftest is no longer supported"
+        assert msg not in res.stdout.str()

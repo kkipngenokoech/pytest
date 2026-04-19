@@ -1,15 +1,10 @@
 """ basic collect and runtest protocol implementations """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import bdb
 import os
 import sys
 from time import time
 
 import attr
-import six
 
 from .reports import CollectErrorRepr
 from .reports import CollectReport
@@ -61,7 +56,7 @@ def pytest_terminal_summary(terminalreporter):
             tr.write_line("")
             tr.write_line("(0.00 durations hidden.  Use -vv to show these durations.)")
             break
-        tr.write_line("%02.2fs %-8s %s" % (rep.duration, rep.when, rep.nodeid))
+        tr.write_line("{:02.2f}s {:<8} {}".format(rep.duration, rep.when, rep.nodeid))
 
 
 def pytest_sessionstart(session):
@@ -199,7 +194,7 @@ def call_runtest_hook(item, when, **kwds):
 
 
 @attr.s(repr=False)
-class CallInfo(object):
+class CallInfo:
     """ Result/Exception info a function invocation. """
 
     _result = attr.ib()
@@ -254,10 +249,11 @@ def pytest_make_collect_report(collector):
     if not call.excinfo:
         outcome = "passed"
     else:
-        from _pytest import nose
-
-        skip_exceptions = (Skipped,) + nose.get_skip_exceptions()
-        if call.excinfo.errisinstance(skip_exceptions):
+        skip_exceptions = [Skipped]
+        unittest = sys.modules.get("unittest")
+        if unittest is not None:
+            skip_exceptions.append(unittest.SkipTest)
+        if call.excinfo.errisinstance(tuple(skip_exceptions)):
             outcome = "skipped"
             r = collector._repr_failure_py(call.excinfo, "line").reprcrash
             longrepr = (str(r.path), r.lineno, r.message)
@@ -274,7 +270,7 @@ def pytest_make_collect_report(collector):
     return rep
 
 
-class SetupState(object):
+class SetupState:
     """ shared state for setting up/tearing down test items or collectors. """
 
     def __init__(self):
@@ -282,10 +278,7 @@ class SetupState(object):
         self._finalizers = {}
 
     def addfinalizer(self, finalizer, colitem):
-        """ attach a finalizer to the given colitem.
-        if colitem is None, this will add a finalizer that
-        is called at the end of teardown_all().
-        """
+        """ attach a finalizer to the given colitem. """
         assert colitem and not isinstance(colitem, tuple)
         assert callable(finalizer)
         # assert colitem in self.stack  # some unit tests don't setup stack :/
@@ -308,16 +301,14 @@ class SetupState(object):
                 if exc is None:
                     exc = sys.exc_info()
         if exc:
-            six.reraise(*exc)
+            _, val, tb = exc
+            raise val.with_traceback(tb)
 
     def _teardown_with_finalization(self, colitem):
         self._callfinalizers(colitem)
-        if hasattr(colitem, "teardown"):
-            colitem.teardown()
+        colitem.teardown()
         for colitem in self._finalizers:
-            assert (
-                colitem is None or colitem in self.stack or isinstance(colitem, tuple)
-            )
+            assert colitem in self.stack
 
     def teardown_all(self):
         while self.stack:
@@ -343,7 +334,8 @@ class SetupState(object):
                 if exc is None:
                     exc = sys.exc_info()
         if exc:
-            six.reraise(*exc)
+            _, val, tb = exc
+            raise val.with_traceback(tb)
 
     def prepare(self, colitem):
         """ setup objects along the collector chain to the test-method
@@ -354,7 +346,8 @@ class SetupState(object):
         # check if the last collection node has raised an error
         for col in self.stack:
             if hasattr(col, "_prepare_exc"):
-                six.reraise(*col._prepare_exc)
+                _, val, tb = col._prepare_exc
+                raise val.with_traceback(tb)
         for col in needed_collectors[len(self.stack) :]:
             self.stack.append(col)
             try:

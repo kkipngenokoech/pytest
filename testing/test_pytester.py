@@ -1,8 +1,3 @@
-# -*- coding: utf-8 -*-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 import subprocess
 import sys
@@ -13,9 +8,7 @@ import py.path
 import _pytest.pytester as pytester
 import pytest
 from _pytest.config import PytestPluginManager
-from _pytest.main import EXIT_NOTESTSCOLLECTED
-from _pytest.main import EXIT_OK
-from _pytest.main import EXIT_TESTSFAILED
+from _pytest.main import ExitCode
 from _pytest.pytester import CwdSnapshot
 from _pytest.pytester import HookRecorder
 from _pytest.pytester import LineMatcher
@@ -30,7 +23,7 @@ def test_make_hook_recorder(testdir):
 
     pytest.xfail("internal reportrecorder tests need refactoring")
 
-    class rep(object):
+    class rep:
         excinfo = None
         passed = False
         failed = True
@@ -43,7 +36,7 @@ def test_make_hook_recorder(testdir):
     failures = recorder.getfailures()
     assert failures == [rep]
 
-    class rep(object):
+    class rep:
         excinfo = None
         passed = False
         failed = False
@@ -79,8 +72,7 @@ def test_make_hook_recorder(testdir):
 def test_parseconfig(testdir):
     config1 = testdir.parseconfig()
     config2 = testdir.parseconfig()
-    assert config2 != config1
-    assert config1 != pytest.config
+    assert config2 is not config1
 
 
 def test_testdir_runs_with_plugin(testdir):
@@ -158,7 +150,7 @@ def test_xpassed_with_strict_is_considered_a_failure(testdir):
 
 
 def make_holder():
-    class apiclass(object):
+    class apiclass:
         def pytest_xyz(self, arg):
             "x"
 
@@ -194,38 +186,31 @@ def test_hookrecorder_basic(holder):
 
 
 def test_makepyfile_unicode(testdir):
-    global unichr
-    try:
-        unichr(65)
-    except NameError:
-        unichr = chr
-    testdir.makepyfile(unichr(0xFFFD))
+    testdir.makepyfile(chr(0xFFFD))
 
 
 def test_makepyfile_utf8(testdir):
     """Ensure makepyfile accepts utf-8 bytes as input (#2738)"""
-    utf8_contents = u"""
+    utf8_contents = """
         def setup_function(function):
-            mixed_encoding = u'São Paulo'
-    """.encode(
-        "utf-8"
-    )
+            mixed_encoding = 'São Paulo'
+    """.encode()
     p = testdir.makepyfile(utf8_contents)
-    assert u"mixed_encoding = u'São Paulo'".encode("utf-8") in p.read("rb")
+    assert "mixed_encoding = 'São Paulo'".encode() in p.read("rb")
 
 
-class TestInlineRunModulesCleanup(object):
+class TestInlineRunModulesCleanup:
     def test_inline_run_test_module_not_cleaned_up(self, testdir):
         test_mod = testdir.makepyfile("def test_foo(): assert True")
         result = testdir.inline_run(str(test_mod))
-        assert result.ret == EXIT_OK
+        assert result.ret == ExitCode.OK
         # rewrite module, now test should fail if module was re-imported
         test_mod.write("def test_foo(): assert False")
         result2 = testdir.inline_run(str(test_mod))
-        assert result2.ret == EXIT_TESTSFAILED
+        assert result2.ret == ExitCode.TESTS_FAILED
 
     def spy_factory(self):
-        class SysModulesSnapshotSpy(object):
+        class SysModulesSnapshotSpy:
             instances = []
 
             def __init__(self, preserve=None):
@@ -245,8 +230,8 @@ class TestInlineRunModulesCleanup(object):
     ):
         spy_factory = self.spy_factory()
         monkeypatch.setattr(pytester, "SysModulesSnapshot", spy_factory)
-        original = dict(sys.modules)
         testdir.syspathinsert()
+        original = dict(sys.modules)
         testdir.makepyfile(import1="# you son of a silly person")
         testdir.makepyfile(import2="# my hovercraft is full of eels")
         test_mod = testdir.makepyfile(
@@ -308,7 +293,7 @@ def test_cwd_snapshot(tmpdir):
     assert py.path.local() == foo
 
 
-class TestSysModulesSnapshot(object):
+class TestSysModulesSnapshot:
     key = "my-test-module"
 
     def test_remove_added(self):
@@ -371,7 +356,7 @@ class TestSysModulesSnapshot(object):
 
 
 @pytest.mark.parametrize("path_type", ("path", "meta_path"))
-class TestSysPathsSnapshot(object):
+class TestSysPathsSnapshot:
     other_path = {"path": "meta_path", "meta_path": "path"}
 
     @staticmethod
@@ -422,13 +407,13 @@ def test_testdir_subprocess(testdir):
 
 
 def test_unicode_args(testdir):
-    result = testdir.runpytest("-k", u"💩")
-    assert result.ret == EXIT_NOTESTSCOLLECTED
+    result = testdir.runpytest("-k", "💩")
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
 
 def test_testdir_run_no_timeout(testdir):
     testfile = testdir.makepyfile("def test_no_timeout(): pass")
-    assert testdir.runpytest_subprocess(testfile).ret == EXIT_OK
+    assert testdir.runpytest_subprocess(testfile).ret == ExitCode.OK
 
 
 def test_testdir_run_with_timeout(testdir):
@@ -441,7 +426,7 @@ def test_testdir_run_with_timeout(testdir):
     end = time.time()
     duration = end - start
 
-    assert result.ret == EXIT_OK
+    assert result.ret == ExitCode.OK
     assert duration < timeout
 
 
@@ -559,3 +544,29 @@ def test_popen_default_stdin_stderr_and_stdin_None(testdir):
     assert stdout.splitlines() == [b"", b"stdout"]
     assert stderr.splitlines() == [b"stderr"]
     assert proc.returncode == 0
+
+
+def test_spawn_uses_tmphome(testdir):
+    import os
+
+    tmphome = str(testdir.tmpdir)
+
+    # Does use HOME only during run.
+    assert os.environ.get("HOME") != tmphome
+
+    testdir._env_run_update["CUSTOMENV"] = "42"
+
+    p1 = testdir.makepyfile(
+        """
+        import os
+
+        def test():
+            assert os.environ["HOME"] == {tmphome!r}
+            assert os.environ["CUSTOMENV"] == "42"
+        """.format(
+            tmphome=tmphome
+        )
+    )
+    child = testdir.spawn_pytest(str(p1))
+    out = child.read()
+    assert child.wait() == 0, out.decode("utf8")

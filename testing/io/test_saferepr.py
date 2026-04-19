@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 from _pytest._io.saferepr import saferepr
 
 
@@ -16,7 +15,7 @@ def test_maxsize():
 
 def test_maxsize_error_on_instance():
     class A:
-        def __repr__():
+        def __repr__(self):
             raise ValueError("...")
 
     s = saferepr(("*" * 50, A()), maxsize=25)
@@ -46,14 +45,25 @@ def test_exceptions():
     assert "unknown" in s2
 
 
+def test_buggy_builtin_repr():
+    # Simulate a case where a repr for a builtin raises.
+    # reprlib dispatches by type name, so use "int".
+
+    class int:
+        def __repr__(self):
+            raise ValueError("Buggy repr!")
+
+    assert "Buggy" in saferepr(int())
+
+
 def test_big_repr():
     from _pytest._io.saferepr import SafeRepr
 
-    assert len(saferepr(range(1000))) <= len("[" + SafeRepr().maxlist * "1000" + "]")
+    assert len(saferepr(range(1000))) <= len("[" + SafeRepr(0).maxlist * "1000" + "]")
 
 
 def test_repr_on_newstyle():
-    class Function(object):
+    class Function:
         def __repr__(self):
             return "<%s>" % (self.name)
 
@@ -61,6 +71,6 @@ def test_repr_on_newstyle():
 
 
 def test_unicode():
-    val = u"£€"
-    reprval = u"'£€'"
+    val = "£€"
+    reprval = "'£€'"
     assert saferepr(val) == reprval

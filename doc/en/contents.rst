@@ -50,6 +50,7 @@ Full pytest documentation
    projects
    faq
    contact
+   sponsor
 
 .. only:: html
 

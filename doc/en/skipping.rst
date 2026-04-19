@@ -346,12 +346,13 @@ Running it with the report-on-xfail option gives this output:
 
     example $ pytest -rx xfail_demo.py
     =========================== test session starts ============================
-    platform linux -- Python 3.x.y, pytest-4.x.y, py-1.x.y, pluggy-0.x.y
+    platform linux -- Python 3.x.y, pytest-5.x.y, py-1.x.y, pluggy-0.x.y
     cachedir: $PYTHON_PREFIX/.pytest_cache
     rootdir: $REGENDOC_TMPDIR/example
     collected 7 items
 
     xfail_demo.py xxxxxxx                                                [100%]
+
     ========================= short test summary info ==========================
     XFAIL xfail_demo.py::test_hello
     XFAIL xfail_demo.py::test_hello2
@@ -365,7 +366,6 @@ Running it with the report-on-xfail option gives this output:
     XFAIL xfail_demo.py::test_hello6
       reason: reason
     XFAIL xfail_demo.py::test_hello7
-
     ======================== 7 xfailed in 0.12 seconds =========================
 
 .. _`skip/xfail with parametrize`:

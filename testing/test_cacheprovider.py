@@ -1,7 +1,3 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 import shutil
 import sys
@@ -10,12 +6,12 @@ import textwrap
 import py
 
 import pytest
-from _pytest.main import EXIT_NOTESTSCOLLECTED
+from _pytest.main import ExitCode
 
 pytest_plugins = ("pytester",)
 
 
-class TestNewAPI(object):
+class TestNewAPI:
     def test_config_cache_makedir(self, testdir):
         testdir.makeini("[pytest]")
         config = testdir.parseconfigure()
@@ -240,7 +236,7 @@ def test_cache_show(testdir):
     assert result.ret == 0
 
 
-class TestLastFailed(object):
+class TestLastFailed:
     def test_lastfailed_usecase(self, testdir, monkeypatch):
         monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
         p = testdir.makepyfile(
@@ -761,7 +757,7 @@ class TestLastFailed(object):
                 "* 2 deselected in *",
             ]
         )
-        assert result.ret == EXIT_NOTESTSCOLLECTED
+        assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
     def test_lastfailed_no_failures_behavior_empty_cache(self, testdir):
         testdir.makepyfile(
@@ -831,8 +827,50 @@ class TestLastFailed(object):
             ]
         )
 
+    def test_lastfailed_with_known_failures_not_being_selected(self, testdir):
+        testdir.makepyfile(
+            **{
+                "pkg1/test_1.py": """def test_1(): assert 0""",
+                "pkg1/test_2.py": """def test_2(): pass""",
+            }
+        )
+        result = testdir.runpytest()
+        result.stdout.fnmatch_lines(["collected 2 items", "* 1 failed, 1 passed in *"])
 
-class TestNewFirst(object):
+        py.path.local("pkg1/test_1.py").remove()
+        result = testdir.runpytest("--lf")
+        result.stdout.fnmatch_lines(
+            [
+                "collected 1 item",
+                "run-last-failure: 1 known failures not in selected tests",
+                "* 1 passed in *",
+            ]
+        )
+
+        # Recreate file with known failure.
+        testdir.makepyfile(**{"pkg1/test_1.py": """def test_1(): assert 0"""})
+        result = testdir.runpytest("--lf")
+        result.stdout.fnmatch_lines(
+            [
+                "collected 1 item",
+                "run-last-failure: rerun previous 1 failure (skipped 1 file)",
+                "* 1 failed in *",
+            ]
+        )
+
+        # Remove/rename test.
+        testdir.makepyfile(**{"pkg1/test_1.py": """def test_renamed(): assert 0"""})
+        result = testdir.runpytest("--lf")
+        result.stdout.fnmatch_lines(
+            [
+                "collected 1 item",
+                "run-last-failure: 1 known failures not in selected tests (skipped 1 file)",
+                "* 1 failed in *",
+            ]
+        )
+
+
+class TestNewFirst:
     def test_newfirst_usecase(self, testdir):
         testdir.makepyfile(
             **{
@@ -957,7 +995,7 @@ class TestNewFirst(object):
         )
 
 
-class TestReadme(object):
+class TestReadme:
     def check_readme(self, testdir):
         config = testdir.parseconfigure()
         readme = config.cache._cachedir.joinpath("README.md")
@@ -996,7 +1034,7 @@ def test_gitignore(testdir):
     assert gitignore_path.read_text(encoding="UTF-8") == msg
 
     # Does not overwrite existing/custom one.
-    gitignore_path.write_text(u"custom")
+    gitignore_path.write_text("custom")
     cache.set("something", "else")
     assert gitignore_path.read_text(encoding="UTF-8") == "custom"
 

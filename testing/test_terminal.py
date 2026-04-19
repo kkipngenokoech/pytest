@@ -1,10 +1,6 @@
 """
 terminal reporting of the full testing process.
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import collections
 import os
 import sys
@@ -14,9 +10,10 @@ import pluggy
 import py
 
 import pytest
-from _pytest.main import EXIT_NOTESTSCOLLECTED
+from _pytest.main import ExitCode
 from _pytest.reports import BaseReport
 from _pytest.terminal import _folded_skips
+from _pytest.terminal import _get_line_with_reprcrash_message
 from _pytest.terminal import _plugin_nameversions
 from _pytest.terminal import build_summary_stats_line
 from _pytest.terminal import getreportopt
@@ -25,7 +22,7 @@ from _pytest.terminal import TerminalReporter
 DistInfo = collections.namedtuple("DistInfo", ["project_name", "version"])
 
 
-class Option(object):
+class Option:
     def __init__(self, verbosity=0, fulltrace=False):
         self.verbosity = verbosity
         self.fulltrace = fulltrace
@@ -73,7 +70,7 @@ def test_plugin_nameversion(input, expected):
     assert result == expected
 
 
-class TestTerminal(object):
+class TestTerminal:
     def test_pass_skip_fail(self, testdir, option):
         testdir.makepyfile(
             """
@@ -236,7 +233,7 @@ class TestTerminal(object):
             )
         else:
             result.stdout.fnmatch_lines(
-                ["(to show a full traceback on KeyboardInterrupt use --fulltrace)"]
+                ["(to show a full traceback on KeyboardInterrupt use --full-trace)"]
             )
         result.stdout.fnmatch_lines(["*KeyboardInterrupt*"])
 
@@ -280,7 +277,7 @@ class TestTerminal(object):
         assert f.getvalue() == "hello" + "\r" + "hey" + (6 * " ")
 
 
-class TestCollectonly(object):
+class TestCollectonly:
     def test_collectonly_basic(self, testdir):
         testdir.makepyfile(
             """
@@ -388,7 +385,7 @@ class TestCollectonly(object):
         result.stdout.fnmatch_lines(["*test_fun.py: 1*"])
 
 
-class TestFixtureReporting(object):
+class TestFixtureReporting:
     def test_setup_fixture_error(self, testdir):
         testdir.makepyfile(
             """
@@ -488,7 +485,7 @@ class TestFixtureReporting(object):
         )
 
 
-class TestTerminalFunctional(object):
+class TestTerminalFunctional:
     def test_deselected(self, testdir):
         testpath = testdir.makepyfile(
             """
@@ -758,12 +755,18 @@ class TestTerminalFunctional(object):
         result.stdout.fnmatch_lines(["collected 3 items", "hello from hook: 3 items"])
 
 
-def test_fail_extra_reporting(testdir):
-    testdir.makepyfile("def test_this(): assert 0")
+def test_fail_extra_reporting(testdir, monkeypatch):
+    monkeypatch.setenv("COLUMNS", "80")
+    testdir.makepyfile("def test_this(): assert 0, 'this_failed' * 100")
     result = testdir.runpytest()
     assert "short test summary" not in result.stdout.str()
     result = testdir.runpytest("-rf")
-    result.stdout.fnmatch_lines(["*test summary*", "FAIL*test_fail_extra_reporting*"])
+    result.stdout.fnmatch_lines(
+        [
+            "*test summary*",
+            "FAILED test_fail_extra_reporting.py::test_this - AssertionError: this_failedt...",
+        ]
+    )
 
 
 def test_fail_reporting_on_pass(testdir):
@@ -855,8 +858,8 @@ def test_color_yes_collection_on_non_atty(testdir, verbose):
 
 
 def test_getreportopt():
-    class Config(object):
-        class Option(object):
+    class Config:
+        class Option:
             reportchars = ""
             disable_warnings = True
 
@@ -885,7 +888,7 @@ def test_getreportopt():
     assert getreportopt(config) == "sxXwEf"  # NOTE: "w" included!
 
     config.option.reportchars = "A"
-    assert getreportopt(config) == "sxXwEfpP"
+    assert getreportopt(config) == "PpsxXwEf"
 
 
 def test_terminalreporter_reportopt_addopts(testdir):
@@ -934,10 +937,10 @@ def test_tbstyle_short(testdir):
 def test_traceconfig(testdir, monkeypatch):
     result = testdir.runpytest("--traceconfig")
     result.stdout.fnmatch_lines(["*active plugins*"])
-    assert result.ret == EXIT_NOTESTSCOLLECTED
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
 
-class TestGenericReporting(object):
+class TestGenericReporting:
     """ this test class can be subclassed with a different option
         provider to run e.g. distributed tests.
     """
@@ -1317,7 +1320,7 @@ def test_skip_counting_towards_summary():
     assert res == ("1 failed", "red")
 
 
-class TestClassicOutputStyle(object):
+class TestClassicOutputStyle:
     """Ensure classic output style works as expected (#3883)"""
 
     @pytest.fixture
@@ -1363,7 +1366,7 @@ class TestClassicOutputStyle(object):
         result.stdout.fnmatch_lines([".F.F.", "*2 failed, 3 passed in*"])
 
 
-class TestProgressOutputStyle(object):
+class TestProgressOutputStyle:
     @pytest.fixture
     def many_tests_files(self, testdir):
         testdir.makepyfile(
@@ -1494,7 +1497,7 @@ class TestProgressOutputStyle(object):
         assert "%]" not in output.stdout.str()
 
 
-class TestProgressWithTeardown(object):
+class TestProgressWithTeardown:
     """Ensure we show the correct percentages for tests that fail during teardown (#3088)"""
 
     @pytest.fixture
@@ -1581,7 +1584,7 @@ def test_skip_reasons_folding():
     message = "justso"
     longrepr = (path, lineno, message)
 
-    class X(object):
+    class X:
         pass
 
     ev1 = X()
@@ -1607,3 +1610,71 @@ def test_skip_reasons_folding():
     assert fspath == path
     assert lineno == lineno
     assert reason == message
+
+
+def test_line_with_reprcrash(monkeypatch):
+    import _pytest.terminal
+    from wcwidth import wcswidth
+
+    mocked_verbose_word = "FAILED"
+
+    mocked_pos = "some::nodeid"
+
+    def mock_get_pos(*args):
+        return mocked_pos
+
+    monkeypatch.setattr(_pytest.terminal, "_get_pos", mock_get_pos)
+
+    class config:
+        pass
+
+    class rep:
+        def _get_verbose_word(self, *args):
+            return mocked_verbose_word
+
+        class longrepr:
+            class reprcrash:
+                pass
+
+    def check(msg, width, expected):
+        __tracebackhide__ = True
+        if msg:
+            rep.longrepr.reprcrash.message = msg
+        actual = _get_line_with_reprcrash_message(config, rep(), width)
+
+        assert actual == expected
+        if actual != "{} {}".format(mocked_verbose_word, mocked_pos):
+            assert len(actual) <= width
+            assert wcswidth(actual) <= width
+
+    # AttributeError with message
+    check(None, 80, "FAILED some::nodeid")
+
+    check("msg", 80, "FAILED some::nodeid - msg")
+    check("msg", 3, "FAILED some::nodeid")
+
+    check("msg", 24, "FAILED some::nodeid")
+    check("msg", 25, "FAILED some::nodeid - msg")
+
+    check("some longer msg", 24, "FAILED some::nodeid")
+    check("some longer msg", 25, "FAILED some::nodeid - ...")
+    check("some longer msg", 26, "FAILED some::nodeid - s...")
+
+    check("some\nmessage", 25, "FAILED some::nodeid - ...")
+    check("some\nmessage", 26, "FAILED some::nodeid - some")
+    check("some\nmessage", 80, "FAILED some::nodeid - some")
+
+    # Test unicode safety.
+    check("😄😄😄😄😄\n2nd line", 25, "FAILED some::nodeid - ...")
+    check("😄😄😄😄😄\n2nd line", 26, "FAILED some::nodeid - ...")
+    check("😄😄😄😄😄\n2nd line", 27, "FAILED some::nodeid - 😄...")
+    check("😄😄😄😄😄\n2nd line", 28, "FAILED some::nodeid - 😄...")
+    check("😄😄😄😄😄\n2nd line", 29, "FAILED some::nodeid - 😄😄...")
+
+    # NOTE: constructed, not sure if this is supported.
+    mocked_pos = "nodeid::😄::withunicode"
+    check("😄😄😄😄😄\n2nd line", 29, "FAILED nodeid::😄::withunicode")
+    check("😄😄😄😄😄\n2nd line", 40, "FAILED nodeid::😄::withunicode - 😄😄...")
+    check("😄😄😄😄😄\n2nd line", 41, "FAILED nodeid::😄::withunicode - 😄😄...")
+    check("😄😄😄😄😄\n2nd line", 42, "FAILED nodeid::😄::withunicode - 😄😄😄...")
+    check("😄😄😄😄😄\n2nd line", 80, "FAILED nodeid::😄::withunicode - 😄😄😄😄😄")

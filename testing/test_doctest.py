@@ -1,19 +1,17 @@
-# encoding: utf-8
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-import sys
+import inspect
 import textwrap
 
 import pytest
 from _pytest.compat import MODULE_NOT_FOUND_ERROR
+from _pytest.doctest import _get_checker
+from _pytest.doctest import _is_mocked
+from _pytest.doctest import _patch_unwrap_mock_aware
 from _pytest.doctest import DoctestItem
 from _pytest.doctest import DoctestModule
 from _pytest.doctest import DoctestTextfile
 
 
-class TestDoctests(object):
+class TestDoctests:
     def test_collect_testtextfile(self, testdir):
         w = testdir.maketxtfile(whatever="")
         checkfile = testdir.maketxtfile(
@@ -145,7 +143,7 @@ class TestDoctests(object):
 
     @pytest.mark.parametrize(
         "   test_string,    encoding",
-        [(u"foo", "ascii"), (u"öäü", "latin1"), (u"öäü", "utf-8")],
+        [("foo", "ascii"), ("öäü", "latin1"), ("öäü", "utf-8")],
     )
     def test_encoding(self, testdir, test_string, encoding):
         """Test support for doctest_encoding ini option.
@@ -158,8 +156,8 @@ class TestDoctests(object):
                 encoding
             )
         )
-        doctest = u"""
-            >>> u"{}"
+        doctest = """
+            >>> "{}"
             {}
         """.format(
             test_string, repr(test_string)
@@ -580,14 +578,13 @@ class TestDoctests(object):
         """Fix internal error with docstrings containing non-ascii characters.
         """
         testdir.makepyfile(
-            u'''
-            # encoding: utf-8
+            '''\
             def foo():
                 """
                 >>> name = 'с' # not letter 'c' but instead Cyrillic 's'.
                 'anything'
                 """
-        '''
+            '''
         )
         result = testdir.runpytest("--doctest-modules")
         result.stdout.fnmatch_lines(["Got nothing", "* 1 failed in*"])
@@ -658,9 +655,6 @@ class TestDoctests(object):
         """
         p = testdir.makepyfile(
             test_unicode_doctest_module="""
-            # -*- encoding: utf-8 -*-
-            from __future__ import unicode_literals
-
             def fix_bad_unicode(text):
                 '''
                     >>> print(fix_bad_unicode('Ãºnico'))
@@ -681,7 +675,7 @@ class TestDoctests(object):
             test_print_unicode_value=r"""
             Here is a doctest::
 
-                >>> print(u'\xE5\xE9\xEE\xF8\xFC')
+                >>> print('\xE5\xE9\xEE\xF8\xFC')
                 åéîøü
         """
         )
@@ -739,7 +733,7 @@ class TestDoctests(object):
         result.stdout.fnmatch_lines(["*collected 1 item*"])
 
 
-class TestLiterals(object):
+class TestLiterals:
     @pytest.mark.parametrize("config_mode", ["ini", "comment"])
     def test_allow_unicode(self, testdir, config_mode):
         """Test that doctests which output unicode work in all python versions
@@ -830,13 +824,11 @@ class TestLiterals(object):
         """
         )
         reprec = testdir.inline_run()
-        passed = int(sys.version_info[0] >= 3)
-        reprec.assertoutcome(passed=passed, failed=int(not passed))
+        reprec.assertoutcome(passed=1)
 
     def test_bytes_literal(self, testdir):
         """Test that doctests which output bytes fail in Python 3 when
-        the ALLOW_BYTES option is not used. The same test should pass
-        in Python 2 (#1287).
+        the ALLOW_BYTES option is not used. (#1287).
         """
         testdir.maketxtfile(
             test_doc="""
@@ -845,11 +837,158 @@ class TestLiterals(object):
         """
         )
         reprec = testdir.inline_run()
-        passed = int(sys.version_info[0] == 2)
-        reprec.assertoutcome(passed=passed, failed=int(not passed))
+        reprec.assertoutcome(failed=1)
+
+    def test_number_re(self):
+        for s in [
+            "1.",
+            "+1.",
+            "-1.",
+            ".1",
+            "+.1",
+            "-.1",
+            "0.1",
+            "+0.1",
+            "-0.1",
+            "1e5",
+            "+1e5",
+            "1e+5",
+            "+1e+5",
+            "1e-5",
+            "+1e-5",
+            "-1e-5",
+            "1.2e3",
+            "-1.2e-3",
+        ]:
+            print(s)
+            m = _get_checker()._number_re.match(s)
+            assert m is not None
+            assert float(m.group()) == pytest.approx(float(s))
+        for s in ["1", "abc"]:
+            print(s)
+            assert _get_checker()._number_re.match(s) is None
+
+    @pytest.mark.parametrize("config_mode", ["ini", "comment"])
+    def test_number_precision(self, testdir, config_mode):
+        """Test the NUMBER option."""
+        if config_mode == "ini":
+            testdir.makeini(
+                """
+                [pytest]
+                doctest_optionflags = NUMBER
+                """
+            )
+            comment = ""
+        else:
+            comment = "#doctest: +NUMBER"
+
+        testdir.maketxtfile(
+            test_doc="""
+
+            Scalars:
+
+            >>> import math
+            >>> math.pi {comment}
+            3.141592653589793
+            >>> math.pi {comment}
+            3.1416
+            >>> math.pi {comment}
+            3.14
+            >>> -math.pi {comment}
+            -3.14
+            >>> math.pi {comment}
+            3.
+            >>> 3. {comment}
+            3.0
+            >>> 3. {comment}
+            3.
+            >>> 3. {comment}
+            3.01
+            >>> 3. {comment}
+            2.99
+            >>> .299 {comment}
+            .3
+            >>> .301 {comment}
+            .3
+            >>> 951. {comment}
+            1e3
+            >>> 1049. {comment}
+            1e3
+            >>> -1049. {comment}
+            -1e3
+            >>> 1e3 {comment}
+            1e3
+            >>> 1e3 {comment}
+            1000.
+
+            Lists:
+
+            >>> [3.1415, 0.097, 13.1, 7, 8.22222e5, 0.598e-2] {comment}
+            [3.14, 0.1, 13., 7, 8.22e5, 6.0e-3]
+            >>> [[0.333, 0.667], [0.999, 1.333]] {comment}
+            [[0.33, 0.667], [0.999, 1.333]]
+            >>> [[[0.101]]] {comment}
+            [[[0.1]]]
+
+            Doesn't barf on non-numbers:
+
+            >>> 'abc' {comment}
+            'abc'
+            >>> None {comment}
+            """.format(
+                comment=comment
+            )
+        )
+        reprec = testdir.inline_run()
+        reprec.assertoutcome(passed=1)
+
+    @pytest.mark.parametrize(
+        "expression,output",
+        [
+            # ints shouldn't match floats:
+            ("3.0", "3"),
+            ("3e0", "3"),
+            ("1e3", "1000"),
+            ("3", "3.0"),
+            # Rounding:
+            ("3.1", "3.0"),
+            ("3.1", "3.2"),
+            ("3.1", "4.0"),
+            ("8.22e5", "810000.0"),
+            # Only the actual output is rounded up, not the expected output:
+            ("3.0", "2.98"),
+            ("1e3", "999"),
+            # The current implementation doesn't understand that numbers inside
+            # strings shouldn't be treated as numbers:
+            pytest.param("'3.1416'", "'3.14'", marks=pytest.mark.xfail),
+        ],
+    )
+    def test_number_non_matches(self, testdir, expression, output):
+        testdir.maketxtfile(
+            test_doc="""
+            >>> {expression} #doctest: +NUMBER
+            {output}
+            """.format(
+                expression=expression, output=output
+            )
+        )
+        reprec = testdir.inline_run()
+        reprec.assertoutcome(passed=0, failed=1)
+
+    def test_number_and_allow_unicode(self, testdir):
+        testdir.maketxtfile(
+            test_doc="""
+            >>> from collections import namedtuple
+            >>> T = namedtuple('T', 'a b c')
+            >>> T(a=0.2330000001, b=u'str', c=b'bytes') # doctest: +ALLOW_UNICODE, +ALLOW_BYTES, +NUMBER
+            T(a=0.233, b=u'str', c='bytes')
+            """
+        )
+        reprec = testdir.inline_run()
+        reprec.assertoutcome(passed=1)
 
 
-class TestDoctestSkips(object):
+class TestDoctestSkips:
     """
     If all examples in a doctest are skipped due to the SKIP option, then
     the tests should be SKIPPED rather than PASSED. (#957)
@@ -930,7 +1069,7 @@ class TestDoctestSkips(object):
         )
 
 
-class TestDoctestAutoUseFixtures(object):
+class TestDoctestAutoUseFixtures:
 
     SCOPES = ["module", "session", "class", "function"]
 
@@ -1074,7 +1213,7 @@ class TestDoctestAutoUseFixtures(object):
         result.stdout.fnmatch_lines(["*=== 1 passed in *"])
 
 
-class TestDoctestNamespaceFixture(object):
+class TestDoctestNamespaceFixture:
 
     SCOPES = ["module", "session", "class", "function"]
 
@@ -1136,7 +1275,7 @@ class TestDoctestNamespaceFixture(object):
         reprec.assertoutcome(passed=1)
 
 
-class TestDoctestReportingOption(object):
+class TestDoctestReportingOption:
     def _run_doctest_report(self, testdir, format):
         testdir.makepyfile(
             """
@@ -1237,3 +1376,24 @@ def test_doctest_mock_objects_dont_recurse_missbehaved(mock_module, testdir):
     )
     result = testdir.runpytest("--doctest-modules")
     result.stdout.fnmatch_lines(["* 1 passed *"])
+
+
+class Broken:
+    def __getattr__(self, _):
+        raise KeyError("This should be an AttributeError")
+
+
+@pytest.mark.parametrize(  # pragma: no branch (lambdas are not called)
+    "stop", [None, _is_mocked, lambda f: None, lambda f: False, lambda f: True]
+)
+def test_warning_on_unwrap_of_broken_object(stop):
+    bad_instance = Broken()
+    assert inspect.unwrap.__module__ == "inspect"
+    with _patch_unwrap_mock_aware():
+        assert inspect.unwrap.__module__ != "inspect"
+        with pytest.warns(
+            pytest.PytestWarning, match="^Got KeyError.* when unwrapping"
+        ):
+            with pytest.raises(KeyError):
+                inspect.unwrap(bad_instance, stop=stop)
+    assert inspect.unwrap.__module__ == "inspect"

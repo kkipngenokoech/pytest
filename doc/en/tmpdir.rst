@@ -22,7 +22,7 @@ created in the `base temporary directory`_.
     # content of test_tmp_path.py
     import os
 
-    CONTENT = u"content"
+    CONTENT = "content"
 
 
     def test_create_file(tmp_path):
@@ -41,7 +41,7 @@ Running this would result in a passed test except for the last
 
     $ pytest test_tmp_path.py
     =========================== test session starts ============================
-    platform linux -- Python 3.x.y, pytest-4.x.y, py-1.x.y, pluggy-0.x.y
+    platform linux -- Python 3.x.y, pytest-5.x.y, py-1.x.y, pluggy-0.x.y
     cachedir: $PYTHON_PREFIX/.pytest_cache
     rootdir: $REGENDOC_TMPDIR
     collected 1 item
@@ -108,7 +108,7 @@ Running this would result in a passed test except for the last
 
     $ pytest test_tmpdir.py
     =========================== test session starts ============================
-    platform linux -- Python 3.x.y, pytest-4.x.y, py-1.x.y, pluggy-0.x.y
+    platform linux -- Python 3.x.y, pytest-5.x.y, py-1.x.y, pluggy-0.x.y
     cachedir: $PYTHON_PREFIX/.pytest_cache
     rootdir: $REGENDOC_TMPDIR
     collected 1 item

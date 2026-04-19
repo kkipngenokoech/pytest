@@ -1,16 +1,15 @@
 import inspect
 import warnings
 from collections import namedtuple
+from collections.abc import MutableMapping
 from operator import attrgetter
+from typing import Set
 
 import attr
-import six
 
 from ..compat import ascii_escaped
 from ..compat import getfslineno
-from ..compat import MappingMixin
 from ..compat import NOTSET
-from _pytest.deprecated import PYTEST_PARAM_UNKNOWN_KWARGS
 from _pytest.outcomes import fail
 from _pytest.warning_types import PytestUnknownMarkWarning
 
@@ -62,26 +61,19 @@ def get_empty_parameterset_mark(config, argnames, func):
 
 class ParameterSet(namedtuple("ParameterSet", "values, marks, id")):
     @classmethod
-    def param(cls, *values, **kwargs):
-        marks = kwargs.pop("marks", ())
+    def param(cls, *values, marks=(), id=None):
         if isinstance(marks, MarkDecorator):
             marks = (marks,)
         else:
             assert isinstance(marks, (tuple, list, set))
 
-        id_ = kwargs.pop("id", None)
-        if id_ is not None:
-            if not isinstance(id_, six.string_types):
+        if id is not None:
+            if not isinstance(id, str):
                 raise TypeError(
-                    "Expected id to be a string, got {}: {!r}".format(type(id_), id_)
+                    "Expected id to be a string, got {}: {!r}".format(type(id), id)
                 )
-            id_ = ascii_escaped(id_)
-
-        if kwargs:
-            warnings.warn(
-                PYTEST_PARAM_UNKNOWN_KWARGS.format(args=sorted(kwargs)), stacklevel=3
-            )
-        return cls(values, marks, id_)
+            id = ascii_escaped(id)
+        return cls(values, marks, id)
 
     @classmethod
     def extract_from(cls, parameterset, force_tuple=False):
@@ -102,16 +94,25 @@ class ParameterSet(namedtuple("ParameterSet", "values, marks, id")):
         else:
             return cls(parameterset, marks=[], id=None)
 
-    @classmethod
-    def _for_parametrize(cls, argnames, argvalues, func, config, function_definition):
+    @staticmethod
+    def _parse_parametrize_args(argnames, argvalues, *args, **kwargs):
         if not isinstance(argnames, (tuple, list)):
             argnames = [x.strip() for x in argnames.split(",") if x.strip()]
             force_tuple = len(argnames) == 1
         else:
             force_tuple = False
-        parameters = [
+        return argnames, force_tuple
+
+    @staticmethod
+    def _parse_parametrize_parameters(argvalues, force_tuple):
+        return [
             ParameterSet.extract_from(x, force_tuple=force_tuple) for x in argvalues
         ]
+
+    @classmethod
+    def _for_parametrize(cls, argnames, argvalues, func, config, function_definition):
+        argnames, force_tuple = cls._parse_parametrize_args(argnames, argvalues)
+        parameters = cls._parse_parametrize_parameters(argvalues, force_tuple)
         del argvalues
 
         if parameters:
@@ -145,7 +146,7 @@ class ParameterSet(namedtuple("ParameterSet", "values, marks, id")):
 
 
 @attr.s(frozen=True)
-class Mark(object):
+class Mark:
     #: name of the mark
     name = attr.ib(type=str)
     #: positional arguments of the mark decorator
@@ -168,11 +169,9 @@ class Mark(object):
 
 
 @attr.s
-class MarkDecorator(object):
+class MarkDecorator:
     """ A decorator for test functions and test classes.  When applied
-    it will create :class:`MarkInfo` objects which may be
-    :ref:`retrieved by hooks as item keywords <excontrolskip>`.
-    MarkDecorator instances are often created like this::
+    it will create :class:`Mark` objects which are often created like this::
 
         mark1 = pytest.mark.NAME              # simple MarkDecorator
         mark2 = pytest.mark.NAME(name1=value) # parametrized MarkDecorator
@@ -184,17 +183,18 @@ class MarkDecorator(object):
             pass
 
     When a MarkDecorator instance is called it does the following:
-      1. If called with a single class as its only positional argument and no
-         additional keyword arguments, it attaches itself to the class so it
-         gets applied automatically to all test cases found in that class.
-      2. If called with a single function as its only positional argument and
-         no additional keyword arguments, it attaches a MarkInfo object to the
-         function, containing all the arguments already stored internally in
-         the MarkDecorator.
-      3. When called in any other case, it performs a 'fake construction' call,
-         i.e. it returns a new MarkDecorator instance with the original
-         MarkDecorator's content updated with the arguments passed to this
-         call.
+
+    1. If called with a single class as its only positional argument and no
+       additional keyword arguments, it attaches itself to the class so it
+       gets applied automatically to all test cases found in that class.
+    2. If called with a single function as its only positional argument and
+       no additional keyword arguments, it attaches a MarkInfo object to the
+       function, containing all the arguments already stored internally in
+       the MarkDecorator.
+    3. When called in any other case, it performs a 'fake construction' call,
+       i.e. it returns a new MarkDecorator instance with the original
+       MarkDecorator's content updated with the arguments passed to this
+       call.
 
     Note: The rules above prevent MarkDecorator objects from storing only a
     single function or class reference as their positional argument with no
@@ -216,7 +216,7 @@ class MarkDecorator(object):
         return self.mark == other.mark if isinstance(other, MarkDecorator) else False
 
     def __repr__(self):
-        return "<MarkDecorator %r>" % (self.mark,)
+        return "<MarkDecorator {!r}>".format(self.mark)
 
     def with_args(self, *args, **kwargs):
         """ return a MarkDecorator with extra arguments added
@@ -277,7 +277,7 @@ def store_mark(obj, mark):
     obj.pytestmark = get_unpacked_marks(obj) + [mark]
 
 
-class MarkGenerator(object):
+class MarkGenerator:
     """ Factory for :class:`MarkDecorator` objects - exposed as
     a ``pytest.mark`` singleton instance.  Example::
 
@@ -290,7 +290,7 @@ class MarkGenerator(object):
     on the ``test_function`` object. """
 
     _config = None
-    _markers = set()
+    _markers = set()  # type: Set[str]
 
     def __getattr__(self, name):
         if name[0] == "_":
@@ -311,8 +311,11 @@ class MarkGenerator(object):
             # If the name is not in the set of known marks after updating,
             # then it really is time to issue a warning or an error.
             if name not in self._markers:
-                if self._config.option.strict:
-                    fail("{!r} is not a registered marker".format(name), pytrace=False)
+                if self._config.option.strict_markers:
+                    fail(
+                        "{!r} not found in `markers` configuration option".format(name),
+                        pytrace=False,
+                    )
                 else:
                     warnings.warn(
                         "Unknown pytest.mark.%s - is this a typo?  You can register "
@@ -327,7 +330,7 @@ class MarkGenerator(object):
 MARK_GEN = MarkGenerator()
 
 
-class NodeKeywords(MappingMixin):
+class NodeKeywords(MutableMapping):
     def __init__(self, node):
         self.node = node
         self.parent = node.parent
@@ -361,11 +364,11 @@ class NodeKeywords(MappingMixin):
         return len(self._seen())
 
     def __repr__(self):
-        return "<NodeKeywords for node %s>" % (self.node,)
+        return "<NodeKeywords for node {}>".format(self.node)
 
 
 @attr.s(cmp=False, hash=False)
-class NodeMarkers(object):
+class NodeMarkers:
     """
     internal structure for storing marks belonging to a node
 

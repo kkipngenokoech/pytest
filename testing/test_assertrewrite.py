@@ -1,9 +1,6 @@
-# -*- coding: utf-8 -*-
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
+import ast
 import glob
+import importlib
 import os
 import py_compile
 import stat
@@ -12,20 +9,15 @@ import textwrap
 import zipfile
 
 import py
-import six
 
 import _pytest._code
 import pytest
 from _pytest.assertion import util
+from _pytest.assertion.rewrite import _get_assertion_exprs
 from _pytest.assertion.rewrite import AssertionRewritingHook
 from _pytest.assertion.rewrite import PYTEST_TAG
 from _pytest.assertion.rewrite import rewrite_asserts
-from _pytest.main import EXIT_NOTESTSCOLLECTED
-
-ast = pytest.importorskip("ast")
-if sys.platform.startswith("java"):
-    # XXX should be xfail
-    pytest.skip("assert rewrite does currently not work on jython")
+from _pytest.main import ExitCode
 
 
 def setup_module(mod):
@@ -40,7 +32,7 @@ def teardown_module(mod):
 
 def rewrite(src):
     tree = ast.parse(src)
-    rewrite_asserts(tree)
+    rewrite_asserts(tree, src.encode())
     return tree
 
 
@@ -52,14 +44,14 @@ def getmsg(f, extra_ns=None, must_pass=False):
     ns = {}
     if extra_ns is not None:
         ns.update(extra_ns)
-    six.exec_(code, ns)
+    exec(code, ns)
     func = ns[f.__name__]
     try:
         func()
     except AssertionError:
         if must_pass:
             pytest.fail("shouldn't have raised")
-        s = six.text_type(sys.exc_info()[1])
+        s = str(sys.exc_info()[1])
         if not s.startswith("assert"):
             return "AssertionError: " + s
         return s
@@ -68,7 +60,7 @@ def getmsg(f, extra_ns=None, must_pass=False):
             pytest.fail("function didn't raise at all")
 
 
-class TestAssertionRewrite(object):
+class TestAssertionRewrite:
     def test_place_initial_imports(self):
         s = """'Doc string'\nother = stuff"""
         m = rewrite(s)
@@ -127,6 +119,37 @@ class TestAssertionRewrite(object):
         result = testdir.runpytest_subprocess()
         assert "warnings" not in "".join(result.outlines)
 
+    def test_rewrites_plugin_as_a_package(self, testdir):
+        pkgdir = testdir.mkpydir("plugin")
+        pkgdir.join("__init__.py").write(
+            "import pytest\n"
+            "@pytest.fixture\n"
+            "def special_asserter():\n"
+            "    def special_assert(x, y):\n"
+            "        assert x == y\n"
+            "    return special_assert\n"
+        )
+        testdir.makeconftest('pytest_plugins = ["plugin"]')
+        testdir.makepyfile("def test(special_asserter): special_asserter(1, 2)\n")
+        result = testdir.runpytest()
+        result.stdout.fnmatch_lines(["*assert 1 == 2*"])
+
+    def test_honors_pep_235(self, testdir, monkeypatch):
+        # note: couldn't make it fail on macos with a single `sys.path` entry
+        # note: these modules are named `test_*` to trigger rewriting
+        testdir.tmpdir.join("test_y.py").write("x = 1")
+        xdir = testdir.tmpdir.join("x").ensure_dir()
+        xdir.join("test_Y").ensure_dir().join("__init__.py").write("x = 2")
+        testdir.makepyfile(
+            "import test_y\n"
+            "import test_Y\n"
+            "def test():\n"
+            "    assert test_y.x == 1\n"
+            "    assert test_Y.x == 2\n"
+        )
+        monkeypatch.syspath_prepend(xdir)
+        testdir.runpytest().assert_outcomes(passed=1)
+
     def test_name(self, request):
         def f():
             assert False
@@ -161,28 +184,22 @@ class TestAssertionRewrite(object):
         def f():
             assert cls == 42  # noqa: F821
 
-        class X(object):
+        class X:
             pass
 
         msg = getmsg(f, {"cls": X}).splitlines()
         if verbose > 0:
-            if six.PY2:
-                assert msg == [
-                    "assert <class 'test_assertrewrite.X'> == 42",
-                    "  -<class 'test_assertrewrite.X'>",
-                    "  +42",
-                ]
-            else:
-                assert msg == [
-                    "assert <class 'test_...e.<locals>.X'> == 42",
-                    "  -<class 'test_assertrewrite.TestAssertionRewrite.test_name.<locals>.X'>",
-                    "  +42",
-                ]
+
+            assert msg == [
+                "assert <class 'test_...e.<locals>.X'> == 42",
+                "  -<class 'test_assertrewrite.TestAssertionRewrite.test_name.<locals>.X'>",
+                "  +42",
+            ]
         else:
             assert msg == ["assert cls == 42"]
 
     def test_dont_rewrite_if_hasattr_fails(self, request):
-        class Y(object):
+        class Y:
             """ A class whos getattr fails, but not with `AttributeError` """
 
             def __getattr__(self, attribute_name):
@@ -277,9 +294,6 @@ class TestAssertionRewrite(object):
             ["*AssertionError: To be escaped: %", "*assert 1 == 2"]
         )
 
-    @pytest.mark.skipif(
-        sys.version_info < (3,), reason="bytes is a string type in python 2"
-    )
     def test_assertion_messages_bytes(self, testdir):
         testdir.makepyfile("def test_bytes_assertion():\n    assert False, b'ohai!'\n")
         result = testdir.runpytest()
@@ -426,7 +440,6 @@ class TestAssertionRewrite(object):
 
         assert getmsg(f) == "assert (False or (4 % 2))"
 
-    @pytest.mark.skipif("sys.version_info < (3,5)")
     def test_at_operator_issue1290(self, testdir):
         testdir.makepyfile(
             """
@@ -441,7 +454,6 @@ class TestAssertionRewrite(object):
         )
         testdir.runpytest().assert_outcomes(passed=1)
 
-    @pytest.mark.skipif("sys.version_info < (3,5)")
     def test_starred_with_side_effect(self, testdir):
         """See #4412"""
         testdir.makepyfile(
@@ -526,7 +538,7 @@ class TestAssertionRewrite(object):
         )
 
     def test_attribute(self):
-        class X(object):
+        class X:
             g = 3
 
         ns = {"x": X}
@@ -616,7 +628,7 @@ class TestAssertionRewrite(object):
 
     def test_assert_raising_nonzero_in_comparison(self):
         def f():
-            class A(object):
+            class A:
                 def __nonzero__(self):
                     raise ValueError(42)
 
@@ -641,7 +653,7 @@ class TestAssertionRewrite(object):
 
     def test_custom_repr(self, request):
         def f():
-            class Foo(object):
+            class Foo:
                 a = 1
 
                 def __repr__(self):
@@ -658,8 +670,8 @@ class TestAssertionRewrite(object):
 
     def test_custom_repr_non_ascii(self):
         def f():
-            class A(object):
-                name = u"ä"
+            class A:
+                name = "ä"
 
                 def __repr__(self):
                     return self.name.encode("UTF-8")  # only legal in python2
@@ -672,7 +684,7 @@ class TestAssertionRewrite(object):
         assert "UnicodeEncodeError" not in msg
 
 
-class TestRewriteOnImport(object):
+class TestRewriteOnImport:
     def test_pycache_is_a_file(self, testdir):
         testdir.tmpdir.join("__pycache__").write("Hello")
         testdir.makepyfile(
@@ -713,7 +725,7 @@ class TestRewriteOnImport(object):
             import test_gum.test_lizard"""
             % (z_fn,)
         )
-        assert testdir.runpytest().ret == EXIT_NOTESTSCOLLECTED
+        assert testdir.runpytest().ret == ExitCode.NO_TESTS_COLLECTED
 
     def test_readonly(self, testdir):
         sub = testdir.mkdir("testing")
@@ -744,9 +756,6 @@ def test_rewritten():
         assert testdir.runpytest_subprocess().ret == 0
 
     def test_orphaned_pyc_file(self, testdir):
-        if sys.version_info < (3, 0) and hasattr(sys, "pypy_version_info"):
-            pytest.skip("pypy2 doesn't run orphaned pyc files")
-
         testdir.makepyfile(
             """
             import orphan
@@ -771,6 +780,24 @@ def test_rewritten():
             os.rename(pycs[0], "orphan.pyc")
 
         assert testdir.runpytest().ret == 0
+
+    def test_cached_pyc_includes_pytest_version(self, testdir, monkeypatch):
+        """Avoid stale caches (#1671)"""
+        monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
+        testdir.makepyfile(
+            test_foo="""
+            def test_foo():
+                assert True
+            """
+        )
+        result = testdir.runpytest_subprocess()
+        assert result.ret == 0
+        found_names = glob.glob(
+            "__pycache__/*-pytest-{}.pyc".format(pytest.__version__)
+        )
+        assert found_names, "pyc with expected tag not found in names: {}".format(
+            glob.glob("__pycache__/*.pyc")
+        )
 
     @pytest.mark.skipif('"__pypy__" in sys.modules')
     def test_pyc_vs_pyo(self, testdir, monkeypatch):
@@ -812,15 +839,11 @@ def test_rewritten():
         testdir.tmpdir.join("test_newlines.py").write(b, "wb")
         assert testdir.runpytest().ret == 0
 
-    @pytest.mark.skipif(
-        sys.version_info < (3, 4),
-        reason="packages without __init__.py not supported on python 2",
-    )
     def test_package_without__init__py(self, testdir):
         pkg = testdir.mkdir("a_package_without_init_py")
         pkg.join("module.py").ensure()
         testdir.makepyfile("import a_package_without_init_py.module")
-        assert testdir.runpytest().ret == EXIT_NOTESTSCOLLECTED
+        assert testdir.runpytest().ret == ExitCode.NO_TESTS_COLLECTED
 
     def test_rewrite_warning(self, testdir):
         testdir.makeconftest(
@@ -859,8 +882,9 @@ def test_rewritten():
         monkeypatch.setattr(
             hook, "_warn_already_imported", lambda code, msg: warnings.append(msg)
         )
-        hook.find_module("test_remember_rewritten_modules")
-        hook.load_module("test_remember_rewritten_modules")
+        spec = hook.find_spec("test_remember_rewritten_modules")
+        module = importlib.util.module_from_spec(spec)
+        hook.exec_module(module)
         hook.mark_rewrite("test_remember_rewritten_modules")
         hook.mark_rewrite("test_remember_rewritten_modules")
         assert warnings == []
@@ -898,97 +922,8 @@ def test_rewritten():
         result.stdout.fnmatch_lines(["*= 1 passed in *=*"])
         assert "pytest-warning summary" not in result.stdout.str()
 
-    @pytest.mark.skipif(sys.version_info[0] > 2, reason="python 2 only")
-    def test_rewrite_future_imports(self, testdir):
-        """Test that rewritten modules don't inherit the __future__ flags
-        from the assertrewrite module.
 
-        assertion.rewrite imports __future__.division (and others), so
-        ensure rewritten modules don't inherit those flags.
-
-        The test below will fail if __future__.division is enabled
-        """
-        testdir.makepyfile(
-            """
-            def test():
-                x = 1 / 2
-                assert type(x) is int
-        """
-        )
-        result = testdir.runpytest()
-        assert result.ret == 0
-
-
-class TestAssertionRewriteHookDetails(object):
-    def test_loader_is_package_false_for_module(self, testdir):
-        testdir.makepyfile(
-            test_fun="""
-            def test_loader():
-                assert not __loader__.is_package(__name__)
-            """
-        )
-        result = testdir.runpytest()
-        result.stdout.fnmatch_lines(["* 1 passed*"])
-
-    def test_loader_is_package_true_for_package(self, testdir):
-        testdir.makepyfile(
-            test_fun="""
-            def test_loader():
-                assert not __loader__.is_package(__name__)
-
-            def test_fun():
-                assert __loader__.is_package('fun')
-
-            def test_missing():
-                assert not __loader__.is_package('pytest_not_there')
-            """
-        )
-        testdir.mkpydir("fun")
-        result = testdir.runpytest()
-        result.stdout.fnmatch_lines(["* 3 passed*"])
-
-    @pytest.mark.skipif("sys.version_info[0] >= 3")
-    @pytest.mark.xfail("hasattr(sys, 'pypy_translation_info')")
-    def test_assume_ascii(self, testdir):
-        content = "u'\xe2\x99\xa5\x01\xfe'"
-        testdir.tmpdir.join("test_encoding.py").write(content, "wb")
-        res = testdir.runpytest()
-        assert res.ret != 0
-        assert "SyntaxError: Non-ASCII character" in res.stdout.str()
-
-    @pytest.mark.skipif("sys.version_info[0] >= 3")
-    def test_detect_coding_cookie(self, testdir):
-        testdir.makepyfile(
-            test_cookie="""
-            # -*- coding: utf-8 -*-
-            u"St\xc3\xa4d"
-            def test_rewritten():
-                assert "@py_builtins" in globals()"""
-        )
-        assert testdir.runpytest().ret == 0
-
-    @pytest.mark.skipif("sys.version_info[0] >= 3")
-    def test_detect_coding_cookie_second_line(self, testdir):
-        testdir.makepyfile(
-            test_cookie="""
-            # -*- coding: utf-8 -*-
-            u"St\xc3\xa4d"
-            def test_rewritten():
-                assert "@py_builtins" in globals()"""
-        )
-        assert testdir.runpytest().ret == 0
-
-    @pytest.mark.skipif("sys.version_info[0] >= 3")
-    def test_detect_coding_cookie_crlf(self, testdir):
-        testdir.makepyfile(
-            test_cookie="""
-            # -*- coding: utf-8 -*-
-            u"St\xc3\xa4d"
-            def test_rewritten():
-                assert "@py_builtins" in globals()"""
-        )
-        assert testdir.runpytest().ret == 0
-
+class TestAssertionRewriteHookDetails:
     def test_sys_meta_path_munged(self, testdir):
         testdir.makepyfile(
             """
@@ -1007,7 +942,7 @@ class TestAssertionRewriteHookDetails(object):
         state = AssertionState(config, "rewrite")
         source_path = tmpdir.ensure("source.py")
         pycpath = tmpdir.join("pyc").strpath
-        assert _write_pyc(state, [1], source_path.stat(), pycpath)
+        assert _write_pyc(state, [1], os.stat(source_path.strpath), pycpath)
 
         @contextmanager
         def atomic_write_failed(fn, mode="r", overwrite=False):
@@ -1069,7 +1004,7 @@ class TestAssertionRewriteHookDetails(object):
         assert len(contents) > strip_bytes
         pyc.write(contents[:strip_bytes], mode="wb")
 
-        assert _read_pyc(source, str(pyc)) is None  # no error
+        assert _read_pyc(str(source), str(pyc)) is None  # no error
 
     def test_reload_is_same(self, testdir):
         # A file that will be picked up during collecting.
@@ -1180,7 +1115,7 @@ def test_issue731(testdir):
     assert "unbalanced braces" not in result.stdout.str()
 
 
-class TestIssue925(object):
+class TestIssue925:
     def test_simple_case(self, testdir):
         testdir.makepyfile(
             """
@@ -1232,6 +1167,9 @@ class TestIssue2121:
         result.stdout.fnmatch_lines(["*E*assert (1 + 1) == 3"])
 
 
+@pytest.mark.skipif(
+    sys.maxsize <= (2 ** 31 - 1), reason="Causes OverflowError on 32bit systems"
+)
 @pytest.mark.parametrize("offset", [-1, +1])
 def test_source_mtime_long_long(testdir, offset):
     """Support modification dates after 2038 in rewritten files (#4903).
@@ -1273,50 +1211,53 @@ def test_rewrite_infinite_recursion(testdir, pytestconfig, monkeypatch):
         # make a note that we have called _write_pyc
         write_pyc_called.append(True)
         # try to import a module at this point: we should not try to rewrite this module
-        assert hook.find_module("test_bar") is None
+        assert hook.find_spec("test_bar") is None
         return original_write_pyc(*args, **kwargs)
 
     monkeypatch.setattr(rewrite, "_write_pyc", spy_write_pyc)
     monkeypatch.setattr(sys, "dont_write_bytecode", False)
 
     hook = AssertionRewritingHook(pytestconfig)
-    assert hook.find_module("test_foo") is not None
+    spec = hook.find_spec("test_foo")
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    hook.exec_module(module)
     assert len(write_pyc_called) == 1
 
 
-class TestEarlyRewriteBailout(object):
+class TestEarlyRewriteBailout:
     @pytest.fixture
     def hook(self, pytestconfig, monkeypatch, testdir):
         """Returns a patched AssertionRewritingHook instance so we can configure its initial paths and track
-        if imp.find_module has been called.
+        if PathFinder.find_spec has been called.
         """
-        import imp
+        import importlib.machinery
 
-        self.find_module_calls = []
+        self.find_spec_calls = []
         self.initial_paths = set()
 
-        class StubSession(object):
+        class StubSession:
             _initialpaths = self.initial_paths
 
             def isinitpath(self, p):
                 return p in self._initialpaths
 
-        def spy_imp_find_module(name, path):
-            self.find_module_calls.append(name)
-            return imp.find_module(name, path)
+        def spy_find_spec(name, path):
+            self.find_spec_calls.append(name)
+            return importlib.machinery.PathFinder.find_spec(name, path)
 
         hook = AssertionRewritingHook(pytestconfig)
         # use default patterns, otherwise we inherit pytest's testing config
         hook.fnpats[:] = ["test_*.py", "*_test.py"]
-        monkeypatch.setattr(hook, "_imp_find_module", spy_imp_find_module)
+        monkeypatch.setattr(hook, "_find_spec", spy_find_spec)
         hook.set_session(StubSession())
         testdir.syspathinsert()
         return hook
 
     def test_basic(self, testdir, hook):
         """
-        Ensure we avoid calling imp.find_module when we know for sure a certain module will not be rewritten
-        to optimize assertion rewriting (#3918).
+        Ensure we avoid calling PathFinder.find_spec when we know for sure a certain
+        module will not be rewritten to optimize assertion rewriting (#3918).
         """
         testdir.makeconftest(
             """
@@ -1331,37 +1272,37 @@ class TestEarlyRewriteBailout(object):
         self.initial_paths.add(foobar_path)
 
         # conftest files should always be rewritten
-        assert hook.find_module("conftest") is not None
-        assert self.find_module_calls == ["conftest"]
+        assert hook.find_spec("conftest") is not None
+        assert self.find_spec_calls == ["conftest"]
 
         # files matching "python_files" mask should always be rewritten
-        assert hook.find_module("test_foo") is not None
-        assert self.find_module_calls == ["conftest", "test_foo"]
+        assert hook.find_spec("test_foo") is not None
+        assert self.find_spec_calls == ["conftest", "test_foo"]
 
         # file does not match "python_files": early bailout
-        assert hook.find_module("bar") is None
-        assert self.find_module_calls == ["conftest", "test_foo"]
+        assert hook.find_spec("bar") is None
+        assert self.find_spec_calls == ["conftest", "test_foo"]
 
         # file is an initial path (passed on the command-line): should be rewritten
-        assert hook.find_module("foobar") is not None
-        assert self.find_module_calls == ["conftest", "test_foo", "foobar"]
+        assert hook.find_spec("foobar") is not None
+        assert self.find_spec_calls == ["conftest", "test_foo", "foobar"]
 
     def test_pattern_contains_subdirectories(self, testdir, hook):
         """If one of the python_files patterns contain subdirectories ("tests/**.py") we can't bailout early
-        because we need to match with the full path, which can only be found by calling imp.find_module.
+        because we need to match with the full path, which can only be found by calling PathFinder.find_spec
         """
         p = testdir.makepyfile(
             **{
-                "tests/file.py": """
-                        def test_simple_failure():
-                            assert 1 + 1 == 3
-                        """
+                "tests/file.py": """\
+                    def test_simple_failure():
+                        assert 1 + 1 == 3
+                """
             }
         )
         testdir.syspathinsert(p.dirpath())
         hook.fnpats[:] = ["tests/**.py"]
-        assert hook.find_module("file") is not None
-        assert self.find_module_calls == ["file"]
+        assert hook.find_spec("file") is not None
+        assert self.find_spec_calls == ["file"]
 
     @pytest.mark.skipif(
         sys.platform.startswith("win32"), reason="cannot remove cwd on Windows"
@@ -1375,20 +1316,215 @@ class TestEarlyRewriteBailout(object):
 
         testdir.makepyfile(
             **{
-                "test_setup_nonexisting_cwd.py": """
-                import os
-                import shutil
-                import tempfile
+                "test_setup_nonexisting_cwd.py": """\
+                    import os
+                    import shutil
+                    import tempfile
 
-                d = tempfile.mkdtemp()
-                os.chdir(d)
-                shutil.rmtree(d)
-            """,
-                "test_test.py": """
-                def test():
-                    pass
-            """,
+                    d = tempfile.mkdtemp()
+                    os.chdir(d)
+                    shutil.rmtree(d)
+                """,
+                "test_test.py": """\
+                    def test():
+                        pass
+                """,
             }
         )
         result = testdir.runpytest()
         result.stdout.fnmatch_lines(["* 1 passed in *"])
+
+
+class TestAssertionPass:
+    def test_option_default(self, testdir):
+        config = testdir.parseconfig()
+        assert config.getini("enable_assertion_pass_hook") is False
+
+    @pytest.fixture
+    def flag_on(self, testdir):
+        testdir.makeini("[pytest]\nenable_assertion_pass_hook = True\n")
+
+    @pytest.fixture
+    def hook_on(self, testdir):
+        testdir.makeconftest(
+            """\
+            def pytest_assertion_pass(item, lineno, orig, expl):
+                raise Exception("Assertion Passed: {} {} at line {}".format(orig, expl, lineno))
+            """
+        )
+
+    def test_hook_call(self, testdir, flag_on, hook_on):
+        testdir.makepyfile(
+            """\
+            def test_simple():
+                a=1
+                b=2
+                c=3
+                d=0
+
+                assert a+b == c+d
+
+            # cover failing assertions with a message
+            def test_fails():
+                assert False, "assert with message"
+            """
+        )
+        result = testdir.runpytest()
+        result.stdout.fnmatch_lines(
+            "*Assertion Passed: a+b == c+d (1 + 2) == (3 + 0) at line 7*"
+        )
+
+    def test_hook_call_with_parens(self, testdir, flag_on, hook_on):
+        testdir.makepyfile(
+            """\
+            def f(): return 1
+            def test():
+                assert f()
+            """
+        )
+        result = testdir.runpytest()
+        result.stdout.fnmatch_lines("*Assertion Passed: f() 1")
+
+    def test_hook_not_called_without_hookimpl(self, testdir, monkeypatch, flag_on):
+        """Assertion pass should not be called (and hence formatting should
+        not occur) if there is no hook declared for pytest_assertion_pass"""
+
+        def raise_on_assertionpass(*_, **__):
+            raise Exception("Assertion passed called when it shouldn't!")
+
+        monkeypatch.setattr(
+            _pytest.assertion.rewrite, "_call_assertion_pass", raise_on_assertionpass
+        )
+
+        testdir.makepyfile(
+            """\
+            def test_simple():
+                a=1
+                b=2
+                c=3
+                d=0
+
+                assert a+b == c+d
+            """
+        )
+        result = testdir.runpytest()
+        result.assert_outcomes(passed=1)
+
+    def test_hook_not_called_without_cmd_option(self, testdir, monkeypatch):
+        """Assertion pass should not be called (and hence formatting should
+        not occur) if there is no hook declared for pytest_assertion_pass"""
+
+        def raise_on_assertionpass(*_, **__):
+            raise Exception("Assertion passed called when it shouldn't!")
+
+        monkeypatch.setattr(
+            _pytest.assertion.rewrite, "_call_assertion_pass", raise_on_assertionpass
+        )
+
+        testdir.makeconftest(
+            """\
+            def pytest_assertion_pass(item, lineno, orig, expl):
+                raise Exception("Assertion Passed: {} {} at line {}".format(orig, expl, lineno))
+            """
+        )
+
+        testdir.makepyfile(
+            """\
+            def test_simple():
+                a=1
+                b=2
+                c=3
+                d=0
+
+                assert a+b == c+d
+            """
+        )
+        result = testdir.runpytest()
+        result.assert_outcomes(passed=1)
+
+
+@pytest.mark.parametrize(
+    ("src", "expected"),
+    (
+        # fmt: off
+        pytest.param(b"", {}, id="trivial"),
+        pytest.param(
+            b"def x(): assert 1\n",
+            {1: "1"},
+            id="assert statement not on own line",
+        ),
+        pytest.param(
+            b"def x():\n"
+            b"    assert 1\n"
+            b"    assert 1+2\n",
+            {2: "1", 3: "1+2"},
+            id="multiple assertions",
+        ),
+        pytest.param(
+            # changes in encoding cause the byte offsets to be different
+            "# -*- coding: latin1\n"
+            "def ÀÀÀÀÀ(): assert 1\n".encode("latin1"),
+            {2: "1"},
+            id="latin1 encoded on first line\n",
+        ),
+        pytest.param(
+            # using the default utf-8 encoding
+            "def ÀÀÀÀÀ(): assert 1\n".encode(),
+            {1: "1"},
+            id="utf-8 encoded on first line",
+        ),
+        pytest.param(
+            b"def x():\n"
+            b"    assert (\n"
+            b"        1 + 2  # comment\n"
+            b"    )\n",
+            {2: "(\n        1 + 2  # comment\n    )"},
+            id="multi-line assertion",
+        ),
+        pytest.param(
+            b"def x():\n"
+            b"    assert y == [\n"
+            b"        1, 2, 3\n"
+            b"    ]\n",
+            {2: "y == [\n        1, 2, 3\n    ]"},
+            id="multi line assert with list continuation",
+        ),
+        pytest.param(
+            b"def x():\n"
+            b"    assert 1 + \\\n"
+            b"        2\n",
+            {2: "1 + \\\n        2"},
+            id="backslash continuation",
+        ),
+        pytest.param(
+            b"def x():\n"
+            b"    assert x, y\n",
+            {2: "x"},
+            id="assertion with message",
+        ),
+        pytest.param(
+            b"def x():\n"
+            b"    assert (\n"
+            b"        f(1, 2, 3)\n"
+            b"    ),  'f did not work!'\n",
+            {2: "(\n        f(1, 2, 3)\n    )"},
+            id="assertion with message, test spanning multiple lines",
+        ),
+        pytest.param(
+            b"def x():\n"
+            b"    assert \\\n"
+            b"        x\\\n"
+            b"        , 'failure message'\n",
+            {2: "x"},
+            id="escaped newlines plus message",
+        ),
+        pytest.param(
+            b"def x(): assert 5",
+            {1: "5"},
+            id="no newline at end of file",
+        ),
+        # fmt: on
+    ),
+)
+def test_get_assertion_exprs(src, expected):
+    assert _get_assertion_exprs(src) == expected

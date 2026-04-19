@@ -1,8 +1,4 @@
 """ generic mechanism for marking and selecting python functions. """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 from .legacy import matchkeyword
 from .legacy import matchmark
 from .structures import EMPTY_PARAMETERSET_OPTION
@@ -95,7 +91,8 @@ def pytest_cmdline_main(config):
         return 0
 
 
-pytest_cmdline_main.tryfirst = True
+# Ignore type because of https://github.com/python/mypy/issues/2087.
+pytest_cmdline_main.tryfirst = True  # type: ignore
 
 
 def deselect_by_keyword(items, config):

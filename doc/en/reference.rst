@@ -1,5 +1,5 @@
-Reference
-=========
+API Reference
+=============
 
 This page contains the full reference to pytest's API.
 
@@ -424,6 +424,14 @@ record_property
 
 .. autofunction:: _pytest.junitxml.record_property()
 
+
+record_testsuite_property
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Tutorial**: :ref:`record_testsuite_property example`.
+
+.. autofunction:: _pytest.junitxml.record_testsuite_property()
+
 caplog
 ~~~~~~
 
@@ -573,6 +581,8 @@ Bootstrapping hooks called for plugins registered early enough (internal and set
 .. autofunction:: pytest_cmdline_parse
 .. autofunction:: pytest_cmdline_main
 
+.. _`initialization-hooks`:
+
 Initialization hooks
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -655,15 +665,14 @@ Session related reporting hooks:
 .. autofunction:: pytest_fixture_post_finalizer
 .. autofunction:: pytest_warning_captured
 
-And here is the central hook for reporting about
-test execution:
+Central hook for reporting about test execution:
 
 .. autofunction:: pytest_runtest_logreport
 
-You can also use this hook to customize assertion representation for some
-types:
+Assertion related hooks:
 
 .. autofunction:: pytest_assertrepr_compare
+.. autofunction:: pytest_assertion_pass
 
 
 Debugging/Interaction hooks
@@ -716,6 +725,14 @@ ExceptionInfo
 
 .. autoclass:: _pytest._code.ExceptionInfo
     :members:
+
+
+pytest.ExitCode
+~~~~~~~~~~~~~~~
+
+.. autoclass:: _pytest.main.ExitCode
+    :members:
+
 
 FixtureDef
 ~~~~~~~~~~
@@ -941,6 +958,14 @@ PYTEST_CURRENT_TEST
 This is not meant to be set by users, but is set by pytest internally with the name of the current test so other
 processes can inspect it, see :ref:`pytest current test env` for more information.
 
+Exceptions
+----------
+
+UsageError
+~~~~~~~~~~
+
+.. autoclass:: _pytest.config.UsageError()
+
 
 .. _`ini options ref`:
 
@@ -1058,6 +1083,23 @@ passed multiple times. The expected format is ``name=value``. For example::
       for more details.
 
 
+.. confval:: faulthandler_timeout
+
+   Dumps the tracebacks of all threads if a test takes longer than ``X`` seconds to run (including
+   fixture setup and teardown). Implemented using the `faulthandler.dump_traceback_later`_ function,
+   so all caveats there apply.
+
+   .. code-block:: ini
+
+        # content of pytest.ini
+        [pytest]
+        faulthandler_timeout=5
+
+   For more information please refer to :ref:`faulthandler`.
+
+.. _`faulthandler.dump_traceback_later`: https://docs.python.org/3/library/faulthandler.html#faulthandler.dump_traceback_later
+
+
 .. confval:: filterwarnings
 
 
@@ -1077,6 +1119,22 @@ passed multiple times. The expected format is ``name=value``. For example::
    This tells pytest to ignore deprecation warnings and turn all other warnings
    into errors. For more information please refer to :ref:`warnings`.
 
+
+.. confval:: junit_duration_report
+
+    .. versionadded:: 4.1
+
+    Configures how durations are recorded into the JUnit XML report:
+
+    * ``total`` (the default): duration times reported include setup, call, and teardown times.
+    * ``call``: duration times reported include only call times, excluding setup and teardown.
+
+    .. code-block:: ini
+
+        [pytest]
+        junit_duration_report = call
+
+
 .. confval:: junit_family
 
     .. versionadded:: 4.2
@@ -1092,9 +1150,34 @@ passed multiple times. The expected format is ``name=value``. For example::
         [pytest]
         junit_family = xunit2
 
+
+.. confval:: junit_logging
+
+    .. versionadded:: 3.5
+
+    Configures if stdout/stderr should be written to the JUnit XML file. Valid values are
+    ``system-out``, ``system-err``, and ``no`` (the default).
+
+    .. code-block:: ini
+
+        [pytest]
+        junit_logging = system-out
+
+
+.. confval:: junit_log_passing_tests
+
+    .. versionadded:: 4.6
+
+    If ``junit_logging != "no"``, configures if the captured output should be written
+    to the JUnit XML file for **passing** tests. Default is ``True``.
+
+    .. code-block:: ini
+
+        [pytest]
+        junit_log_passing_tests = False
+
+
 .. confval:: junit_suite_name
-
-
 
     To set the name of the root test suite xml item, you can configure the ``junit_suite_name`` option in your config file:
 
@@ -1261,15 +1344,17 @@ passed multiple times. The expected format is ``name=value``. For example::
 
 .. confval:: markers
 
-    When the ``--strict`` command-line argument is used, only known markers -
-    defined in code by core pytest or some plugin - are allowed.
-    You can list additional markers in this setting to add them to the whitelist.
+    When the ``--strict-markers`` or ``--strict`` command-line arguments are used,
+    only known markers - defined in code by core pytest or some plugin - are allowed.
 
-    You can list one marker name per line, indented from the option name.
+    You can list additional markers in this setting to add them to the whitelist,
+    in which case you probably want to add ``--strict-markers`` to ``addopts``
+    to avoid future regressions:
 
     .. code-block:: ini
 
         [pytest]
+        addopts = --strict-markers
         markers =
             slow
             serial

@@ -1,7 +1,3 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import argparse
 import distutils.spawn
 import os
@@ -19,7 +15,7 @@ def parser():
     return parseopt.Parser()
 
 
-class TestParser(object):
+class TestParser:
     def test_no_help_by_default(self):
         parser = parseopt.Parser(usage="xyz")
         pytest.raises(UsageError, lambda: parser.parse(["-h"]))
@@ -156,7 +152,7 @@ class TestParser(object):
         parser.addoption("--hello", dest="hello", action="store")
         parser.addoption("--world", dest="world", default=42)
 
-        class A(object):
+        class A:
             pass
 
         option = A()
@@ -204,7 +200,7 @@ class TestParser(object):
 
     def test_drop_short_helper(self):
         parser = argparse.ArgumentParser(
-            formatter_class=parseopt.DropShorterLongHelpFormatter
+            formatter_class=parseopt.DropShorterLongHelpFormatter, allow_abbrev=False
         )
         parser.add_argument(
             "-t", "--twoword", "--duo", "--two-word", "--two", help="foo"
@@ -243,10 +239,8 @@ class TestParser(object):
         parser.addoption("--funcarg", "--func-arg", action="store_true")
         parser.addoption("--abc-def", "--abc-def", action="store_true")
         parser.addoption("--klm-hij", action="store_true")
-        args = parser.parse(["--funcarg", "--k"])
-        assert args.funcarg is True
-        assert args.abc_def is False
-        assert args.klm_hij is True
+        with pytest.raises(UsageError):
+            parser.parse(["--funcarg", "--k"])
 
     def test_drop_short_2(self, parser):
         parser.addoption("--func-arg", "--doit", action="store_true")

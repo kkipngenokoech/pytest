@@ -8,26 +8,19 @@ Based on initial code from Ross Lawley.
 Output conforms to https://github.com/jenkinsci/xunit-plugin/blob/master/
 src/main/resources/org/jenkinsci/plugins/xunit/types/model/xsd/junit-10.xsd
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import functools
 import os
 import re
+import socket
 import sys
 import time
+from datetime import datetime
 
 import py
-import six
 
 import pytest
 from _pytest import nodes
 from _pytest.config import filename_arg
-
-# Python 2.X and 3.X compatibility
-if sys.version_info[0] < 3:
-    from codecs import open
 
 
 class Junit(py.xml.Namespace):
@@ -42,12 +35,12 @@ class Junit(py.xml.Namespace):
 _legal_chars = (0x09, 0x0A, 0x0D)
 _legal_ranges = ((0x20, 0x7E), (0x80, 0xD7FF), (0xE000, 0xFFFD), (0x10000, 0x10FFFF))
 _legal_xml_re = [
-    u"%s-%s" % (six.unichr(low), six.unichr(high))
+    "{}-{}".format(chr(low), chr(high))
     for (low, high) in _legal_ranges
     if low < sys.maxunicode
 ]
-_legal_xml_re = [six.unichr(x) for x in _legal_chars] + _legal_xml_re
-illegal_xml_re = re.compile(u"[^%s]" % u"".join(_legal_xml_re))
+_legal_xml_re = [chr(x) for x in _legal_chars] + _legal_xml_re
+illegal_xml_re = re.compile("[^%s]" % "".join(_legal_xml_re))
 del _legal_chars
 del _legal_ranges
 del _legal_xml_re
@@ -59,9 +52,9 @@ def bin_xml_escape(arg):
     def repl(matchobj):
         i = ord(matchobj.group())
         if i <= 0xFF:
-            return u"#x%02X" % i
+            return "#x%02X" % i
         else:
-            return u"#x%04X" % i
+            return "#x%04X" % i
 
     return py.xml.raw(illegal_xml_re.sub(repl, py.xml.escape(arg)))
 
@@ -88,7 +81,7 @@ merge_family(families["xunit1"], families["_base_legacy"])
 families["xunit2"] = families["_base"]
 
 
-class _NodeReporter(object):
+class _NodeReporter:
     def __init__(self, nodeid, xml):
         self.id = nodeid
         self.xml = xml
@@ -166,6 +159,9 @@ class _NodeReporter(object):
         self.append(node)
 
     def write_captured_output(self, report):
+        if not self.xml.log_passing_tests and report.passed:
+            return
+
         content_out = report.capstdout
         content_log = report.caplog
         content_err = report.capstderr
@@ -225,7 +221,7 @@ class _NodeReporter(object):
         else:
             if hasattr(report.longrepr, "reprcrash"):
                 message = report.longrepr.reprcrash.message
-            elif isinstance(report.longrepr, six.string_types):
+            elif isinstance(report.longrepr, str):
                 message = report.longrepr
             else:
                 message = str(report.longrepr)
@@ -264,7 +260,7 @@ class _NodeReporter(object):
             filename, lineno, skipreason = report.longrepr
             if skipreason.startswith("Skipped: "):
                 skipreason = skipreason[9:]
-            details = "%s:%s: %s" % (filename, lineno, skipreason)
+            details = "{}:{}: {}".format(filename, lineno, skipreason)
 
             self.append(
                 Junit.skipped(
@@ -345,6 +341,45 @@ def record_xml_attribute(request):
     return attr_func
 
 
+def _check_record_param_type(param, v):
+    """Used by record_testsuite_property to check that the given parameter name is of the proper
+    type"""
+    __tracebackhide__ = True
+    if not isinstance(v, str):
+        msg = "{param} parameter needs to be a string, but {g} given"
+        raise TypeError(msg.format(param=param, g=type(v).__name__))
+
+
+@pytest.fixture(scope="session")
+def record_testsuite_property(request):
+    """
+    Records a new ``<property>`` tag as child of the root ``<testsuite>``. This is suitable to
+    writing global information regarding the entire test suite, and is compatible with ``xunit2`` JUnit family.
+
+    This is a ``session``-scoped fixture which is called with ``(name, value)``. Example:
+
+    .. code-block:: python
+
+        def test_foo(record_testsuite_property):
+            record_testsuite_property("ARCH", "PPC")
+            record_testsuite_property("STORAGE_TYPE", "CEPH")
+
+    ``name`` must be a string, ``value`` will be converted to a string and properly xml-escaped.
+    """
+
+    __tracebackhide__ = True
+
+    def record_func(name, value):
+        """noop function in case --junitxml was not passed in the command-line"""
+        __tracebackhide__ = True
+        _check_record_param_type("name", name)
+
+    xml = getattr(request.config, "_xml", None)
+    if xml is not None:
+        record_func = xml.add_global_property  # noqa
+    return record_func
+
+
 def pytest_addoption(parser):
     group = parser.getgroup("terminal reporting")
     group.addoption(
@@ -375,6 +410,12 @@ def pytest_addoption(parser):
         default="no",
     )  # choices=['no', 'stdout', 'stderr'])
     parser.addini(
+        "junit_log_passing_tests",
+        "Capture log information for passing tests to JUnit report: ",
+        type="bool",
+        default=True,
+    )
+    parser.addini(
         "junit_duration_report",
         "Duration time to report: one of total|call",
         default="total",
@@ -397,6 +438,7 @@ def pytest_configure(config):
             config.getini("junit_logging"),
             config.getini("junit_duration_report"),
             config.getini("junit_family"),
+            config.getini("junit_log_passing_tests"),
         )
         config.pluginmanager.register(config._xml)
 
@@ -423,7 +465,7 @@ def mangle_test_address(address):
     return names
 
 
-class LogXML(object):
+class LogXML:
     def __init__(
         self,
         logfile,
@@ -432,18 +474,21 @@ class LogXML(object):
         logging="no",
         report_duration="total",
         family="xunit1",
+        log_passing_tests=True,
     ):
         logfile = os.path.expanduser(os.path.expandvars(logfile))
         self.logfile = os.path.normpath(os.path.abspath(logfile))
         self.prefix = prefix
         self.suite_name = suite_name
         self.logging = logging
+        self.log_passing_tests = log_passing_tests
         self.report_duration = report_duration
         self.family = family
         self.stats = dict.fromkeys(["error", "passed", "failure", "skipped"], 0)
         self.node_reporters = {}  # nodeid -> _NodeReporter
         self.node_reporters_ordered = []
         self.global_properties = []
+
         # List of reports that failed on call but teardown is pending.
         self.open_reports = []
         self.cnt_double_fail_tests = 0
@@ -614,25 +659,26 @@ class LogXML(object):
         )
         logfile.write('<?xml version="1.0" encoding="utf-8"?>')
 
-        logfile.write(
-            Junit.testsuite(
-                self._get_global_properties_node(),
-                [x.to_xml() for x in self.node_reporters_ordered],
-                name=self.suite_name,
-                errors=self.stats["error"],
-                failures=self.stats["failure"],
-                skipped=self.stats["skipped"],
-                tests=numtests,
-                time="%.3f" % suite_time_delta,
-            ).unicode(indent=0)
+        suite_node = Junit.testsuite(
+            self._get_global_properties_node(),
+            [x.to_xml() for x in self.node_reporters_ordered],
+            name=self.suite_name,
+            errors=self.stats["error"],
+            failures=self.stats["failure"],
+            skipped=self.stats["skipped"],
+            tests=numtests,
+            time="%.3f" % suite_time_delta,
         )
+        logfile.write(Junit.testsuites([suite_node]).unicode(indent=0))
         logfile.close()
 
     def pytest_terminal_summary(self, terminalreporter):
         terminalreporter.write_sep("-", "generated xml file: %s" % (self.logfile))
 
     def add_global_property(self, name, value):
-        self.global_properties.append((str(name), bin_xml_escape(value)))
+        __tracebackhide__ = True
+        _check_record_param_type("name", name)
+        self.global_properties.append((name, bin_xml_escape(value)))
 
     def _get_global_properties_node(self):
         """Return a Junit node containing custom properties, if any.

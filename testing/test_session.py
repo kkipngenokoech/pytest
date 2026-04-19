@@ -1,12 +1,8 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import pytest
-from _pytest.main import EXIT_NOTESTSCOLLECTED
+from _pytest.main import ExitCode
 
 
-class SessionTests(object):
+class SessionTests:
     def test_basic_testitem_events(self, testdir):
         tfile = testdir.makepyfile(
             """
@@ -75,7 +71,7 @@ class SessionTests(object):
         values = reprec.getfailedcollections()
         assert len(values) == 1
         out = str(values[0].longrepr)
-        assert out.find(str("not python")) != -1
+        assert out.find("not python") != -1
 
     def test_exit_first_problem(self, testdir):
         reprec = testdir.inline_runsource(
@@ -171,7 +167,7 @@ class SessionTests(object):
         )
         try:
             reprec = testdir.inline_run(testdir.tmpdir)
-        except pytest.skip.Exception:  # pragma: no covers
+        except pytest.skip.Exception:  # pragma: no cover
             pytest.fail("wrong skipped caught")
         reports = reprec.getreports("pytest_collectreport")
         assert len(reports) == 1
@@ -334,7 +330,7 @@ def test_sessionfinish_with_start(testdir):
     """
     )
     res = testdir.runpytest("--collect-only")
-    assert res.ret == EXIT_NOTESTSCOLLECTED
+    assert res.ret == ExitCode.NO_TESTS_COLLECTED
 
 
 @pytest.mark.parametrize("path", ["root", "{relative}/root", "{environment}/root"])

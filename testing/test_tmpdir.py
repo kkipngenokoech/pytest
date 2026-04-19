@@ -1,16 +1,12 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
+import os
+import stat
 import sys
 
 import attr
-import six
 
 import pytest
 from _pytest import pathlib
 from _pytest.pathlib import Path
-from _pytest.warnings import SHOW_PYTEST_WARNINGS_ARG
 
 
 def test_tmpdir_fixture(testdir):
@@ -19,17 +15,9 @@ def test_tmpdir_fixture(testdir):
     results.stdout.fnmatch_lines(["*1 passed*"])
 
 
-def test_ensuretemp(recwarn):
-    d1 = pytest.ensuretemp("hello")
-    d2 = pytest.ensuretemp("hello")
-    assert d1 == d2
-    assert d1.check(dir=1)
-
-
 @attr.s
-class FakeConfig(object):
+class FakeConfig:
     basetemp = attr.ib()
-    trace = attr.ib(default=None)
 
     @property
     def trace(self):
@@ -43,7 +31,7 @@ class FakeConfig(object):
         return self
 
 
-class TestTempdirHandler(object):
+class TestTempdirHandler:
     def test_mktemp(self, tmp_path):
 
         from _pytest.tmpdir import TempdirFactory, TempPathFactory
@@ -58,8 +46,8 @@ class TestTempdirHandler(object):
         assert tmp2.relto(t.getbasetemp()).startswith("this")
         assert tmp2 != tmp
 
-    @pytest.mark.issue(4425)
     def test_tmppath_relative_basetemp_absolute(self, tmp_path, monkeypatch):
+        """#4425"""
         from _pytest.tmpdir import TempPathFactory
 
         monkeypatch.chdir(tmp_path)
@@ -68,7 +56,7 @@ class TestTempdirHandler(object):
         assert t.getbasetemp().resolve() == (tmp_path / "hello").resolve()
 
 
-class TestConfigTmpdir(object):
+class TestConfigTmpdir:
     def test_getbasetemp_custom_removes_old(self, testdir):
         mytemp = testdir.tmpdir.join("xyz")
         p = testdir.makepyfile(
@@ -91,12 +79,13 @@ def test_basetemp(testdir):
     p = testdir.makepyfile(
         """
         import pytest
-        def test_1():
-            pytest.ensuretemp("hello")
+        def test_1(tmpdir_factory):
+            tmpdir_factory.mktemp('hello', numbered=False)
     """
     )
-    result = testdir.runpytest(p, "--basetemp=%s" % mytemp, SHOW_PYTEST_WARNINGS_ARG)
+    result = testdir.runpytest(p, "--basetemp=%s" % mytemp)
     assert result.ret == 0
+    print(mytemp)
     assert mytemp.join("hello").check()
 
 
@@ -233,7 +222,7 @@ def test_get_user(monkeypatch):
     assert get_user() is None
 
 
-class TestNumberedDir(object):
+class TestNumberedDir:
     PREFIX = "fun-"
 
     def test_make(self, tmp_path):
@@ -316,22 +305,6 @@ class TestNumberedDir(object):
             p, consider_lock_dead_if_created_before=p.stat().st_mtime + 1
         )
 
-    def test_rmtree(self, tmp_path):
-        from _pytest.pathlib import rmtree
-
-        adir = tmp_path / "adir"
-        adir.mkdir()
-        rmtree(adir)
-
-        assert not adir.exists()
-
-        adir.mkdir()
-        afile = adir / "afile"
-        afile.write_bytes(b"aa")
-
-        rmtree(adir, force=True)
-        assert not adir.exists()
-
     def test_cleanup_ignores_symlink(self, tmp_path):
         the_symlink = tmp_path / (self.PREFIX + "current")
         attempt_symlink_to(the_symlink, tmp_path / (self.PREFIX + "5"))
@@ -344,11 +317,86 @@ class TestNumberedDir(object):
         assert folder.is_dir()
 
 
+class TestRmRf:
+    def test_rm_rf(self, tmp_path):
+        from _pytest.pathlib import rm_rf
+
+        adir = tmp_path / "adir"
+        adir.mkdir()
+        rm_rf(adir)
+
+        assert not adir.exists()
+
+        adir.mkdir()
+        afile = adir / "afile"
+        afile.write_bytes(b"aa")
+
+        rm_rf(adir)
+        assert not adir.exists()
+
+    def test_rm_rf_with_read_only_file(self, tmp_path):
+        """Ensure rm_rf can remove directories with read-only files in them (#5524)"""
+        from _pytest.pathlib import rm_rf
+
+        fn = tmp_path / "dir/foo.txt"
+        fn.parent.mkdir()
+
+        fn.touch()
+
+        self.chmod_r(fn)
+
+        rm_rf(fn.parent)
+
+        assert not fn.parent.is_dir()
+
+    def chmod_r(self, path):
+        mode = os.stat(str(path)).st_mode
+        os.chmod(str(path), mode & ~stat.S_IWRITE)
+
+    def test_rm_rf_with_read_only_directory(self, tmp_path):
+        """Ensure rm_rf can remove read-only directories (#5524)"""
+        from _pytest.pathlib import rm_rf
+
+        adir = tmp_path / "dir"
+        adir.mkdir()
+
+        (adir / "foo.txt").touch()
+        self.chmod_r(adir)
+
+        rm_rf(adir)
+
+        assert not adir.is_dir()
+
+    def test_on_rm_rf_error(self, tmp_path):
+        from _pytest.pathlib import on_rm_rf_error
+
+        adir = tmp_path / "dir"
+        adir.mkdir()
+
+        fn = adir / "foo.txt"
+        fn.touch()
+        self.chmod_r(fn)
+
+        # unknown exception
+        with pytest.warns(pytest.PytestWarning):
+            exc_info = (None, RuntimeError(), None)
+            on_rm_rf_error(os.unlink, str(fn), exc_info, start_path=tmp_path)
+            assert fn.is_file()
+
+        # unknown function
+        with pytest.warns(pytest.PytestWarning):
+            exc_info = (None, PermissionError(), None)
+            on_rm_rf_error(None, str(fn), exc_info, start_path=tmp_path)
+            assert fn.is_file()
+
+        exc_info = (None, PermissionError(), None)
+        on_rm_rf_error(os.unlink, str(fn), exc_info, start_path=tmp_path)
+        assert not fn.is_file()
+
+
 def attempt_symlink_to(path, to_path):
     """Try to make a symlink from "path" to "to_path", skipping in case this platform
     does not support it or we don't have sufficient privileges (common on Windows)."""
-    if sys.platform.startswith("win") and six.PY2:
-        pytest.skip("pathlib for some reason cannot make symlinks on Python 2")
     try:
         Path(path).symlink_to(Path(to_path))
     except OSError:
@@ -357,3 +405,24 @@ def attempt_symlink_to(path, to_path):
 
 def test_tmpdir_equals_tmp_path(tmpdir, tmp_path):
     assert Path(tmpdir) == tmp_path
+
+
+def test_basetemp_with_read_only_files(testdir):
+    """Integration test for #5524"""
+    testdir.makepyfile(
+        """
+        import os
+        import stat
+
+        def test(tmp_path):
+            fn = tmp_path / 'foo.txt'
+            fn.write_text('hello')
+            mode = os.stat(str(fn)).st_mode
+            os.chmod(str(fn), mode & ~stat.S_IREAD)
+    """
+    )
+    result = testdir.runpytest("--basetemp=tmp")
+    assert result.ret == 0
+    # running a second time and ensure we don't crash
+    result = testdir.runpytest("--basetemp=tmp")
+    assert result.ret == 0

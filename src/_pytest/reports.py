@@ -1,7 +1,7 @@
 from pprint import pprint
+from typing import Optional
 
 import py
-import six
 
 from _pytest._code.code import ExceptionInfo
 from _pytest._code.code import ReprEntry
@@ -22,17 +22,14 @@ def getslaveinfoline(node):
     except AttributeError:
         d = node.slaveinfo
         ver = "%s.%s.%s" % d["version_info"][:3]
-        node._slaveinfocache = s = "[%s] %s -- Python %s %s" % (
-            d["id"],
-            d["sysplatform"],
-            ver,
-            d["executable"],
+        node._slaveinfocache = s = "[{}] {} -- Python {} {}".format(
+            d["id"], d["sysplatform"], ver, d["executable"]
         )
         return s
 
 
-class BaseReport(object):
-    when = None
+class BaseReport:
+    when = None  # type: Optional[str]
     location = None
 
     def __init__(self, **kw):
@@ -194,7 +191,7 @@ class BaseReport(object):
             ):
                 d["longrepr"] = disassembled_report(self)
             else:
-                d["longrepr"] = six.text_type(self.longrepr)
+                d["longrepr"] = str(self.longrepr)
         else:
             d["longrepr"] = self.longrepr
         for name in d:
@@ -334,11 +331,8 @@ class TestReport(BaseReport):
         self.__dict__.update(extra)
 
     def __repr__(self):
-        return "<%s %r when=%r outcome=%r>" % (
-            self.__class__.__name__,
-            self.nodeid,
-            self.when,
-            self.outcome,
+        return "<{} {!r} when={!r} outcome={!r}>".format(
+            self.__class__.__name__, self.nodeid, self.when, self.outcome
         )
 
     @classmethod
@@ -371,7 +365,7 @@ class TestReport(BaseReport):
                         excinfo, style=item.config.getoption("tbstyle", "auto")
                     )
         for rwhen, key, content in item._report_sections:
-            sections.append(("Captured %s %s" % (key, rwhen), content))
+            sections.append(("Captured {} {}".format(key, rwhen), content))
         return cls(
             item.nodeid,
             item.location,
@@ -401,10 +395,8 @@ class CollectReport(BaseReport):
         return (self.fspath, None, self.fspath)
 
     def __repr__(self):
-        return "<CollectReport %r lenresult=%s outcome=%r>" % (
-            self.nodeid,
-            len(self.result),
-            self.outcome,
+        return "<CollectReport {!r} lenresult={} outcome={!r}>".format(
+            self.nodeid, len(self.result), self.outcome
         )
 
 

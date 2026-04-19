@@ -1,9 +1,9 @@
 Installation and Getting Started
 ===================================
 
-**Pythons**: Python 2.7, 3.4, 3.5, 3.6, 3.7, Jython, PyPy-2.3
+**Pythons**: Python 3.5, 3.6, 3.7, PyPy3
 
-**Platforms**: Unix/Posix and Windows
+**Platforms**: Linux and Windows
 
 **PyPI package name**: `pytest <https://pypi.org/project/pytest/>`_
 
@@ -28,7 +28,7 @@ Install ``pytest``
 .. code-block:: bash
 
     $ pytest --version
-    This is pytest version 4.x.y, imported from $PYTHON_PREFIX/lib/python3.6/site-packages/pytest.py
+    This is pytest version 5.x.y, imported from $PYTHON_PREFIX/lib/python3.6/site-packages/pytest.py
 
 .. _`simpletest`:
 
@@ -50,7 +50,7 @@ That’s it. You can now execute the test function:
 
     $ pytest
     =========================== test session starts ============================
-    platform linux -- Python 3.x.y, pytest-4.x.y, py-1.x.y, pluggy-0.x.y
+    platform linux -- Python 3.x.y, pytest-5.x.y, py-1.x.y, pluggy-0.x.y
     cachedir: $PYTHON_PREFIX/.pytest_cache
     rootdir: $REGENDOC_TMPDIR
     collected 1 item
@@ -83,7 +83,7 @@ Run multiple tests
 Assert that a certain exception is raised
 --------------------------------------------------------------
 
-Use the ``raises`` helper to assert that some code raises an exception::
+Use the :ref:`raises <assertraises>` helper to assert that some code raises an exception::
 
     # content of test_sysexit.py
     import pytest
@@ -142,7 +142,7 @@ The first test passed and the second failed. You can easily see the intermediate
 Request a unique temporary directory for functional tests
 --------------------------------------------------------------
 
-``pytest`` provides `Builtin fixtures/function arguments <https://docs.pytest.org/en/latest/builtin.html#builtinfixtures>`_ to request arbitrary resources, like a unique temporary directory::
+``pytest`` provides `Builtin fixtures/function arguments <https://docs.pytest.org/en/latest/builtin.html>`_ to request arbitrary resources, like a unique temporary directory::
 
     # content of test_tmpdir.py
     def test_needsfiles(tmpdir):

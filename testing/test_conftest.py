@@ -1,16 +1,10 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import textwrap
 
 import py
 
 import pytest
 from _pytest.config import PytestPluginManager
-from _pytest.main import EXIT_NOTESTSCOLLECTED
-from _pytest.main import EXIT_OK
-from _pytest.main import EXIT_USAGEERROR
+from _pytest.main import ExitCode
 
 
 def ConftestWithSetinitial(path):
@@ -20,7 +14,7 @@ def ConftestWithSetinitial(path):
 
 
 def conftest_setinitial(conftest, args, confcutdir=None):
-    class Namespace(object):
+    class Namespace:
         def __init__(self):
             self.file_or_dir = args
             self.confcutdir = str(confcutdir)
@@ -31,7 +25,7 @@ def conftest_setinitial(conftest, args, confcutdir=None):
 
 
 @pytest.mark.usefixtures("_sys_snapshot")
-class TestConftestValueAccessGlobal(object):
+class TestConftestValueAccessGlobal:
     @pytest.fixture(scope="module", params=["global", "inpackage"])
     def basedir(self, request, tmpdir_factory):
         tmpdir = tmpdir_factory.mktemp("basedir", numbered=True)
@@ -227,11 +221,11 @@ def test_conftest_symlink(testdir):
             "PASSED",
         ]
     )
-    assert result.ret == EXIT_OK
+    assert result.ret == ExitCode.OK
 
     # Should not cause "ValueError: Plugin already registered" (#4174).
     result = testdir.runpytest("-vs", "symlink")
-    assert result.ret == EXIT_OK
+    assert result.ret == ExitCode.OK
 
     realtests.ensure("__init__.py")
     result = testdir.runpytest("-vs", "symlinktests/test_foo.py::test1")
@@ -242,7 +236,7 @@ def test_conftest_symlink(testdir):
             "PASSED",
         ]
     )
-    assert result.ret == EXIT_OK
+    assert result.ret == ExitCode.OK
 
 
 @pytest.mark.skipif(
@@ -278,16 +272,16 @@ def test_conftest_symlink_files(testdir):
     build.chdir()
     result = testdir.runpytest("-vs", "app/test_foo.py")
     result.stdout.fnmatch_lines(["*conftest_loaded*", "PASSED"])
-    assert result.ret == EXIT_OK
+    assert result.ret == ExitCode.OK
 
 
 def test_no_conftest(testdir):
     testdir.makeconftest("assert 0")
     result = testdir.runpytest("--noconftest")
-    assert result.ret == EXIT_NOTESTSCOLLECTED
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
     result = testdir.runpytest()
-    assert result.ret == EXIT_USAGEERROR
+    assert result.ret == ExitCode.USAGE_ERROR
 
 
 def test_conftest_existing_resultlog(testdir):
@@ -400,7 +394,7 @@ def test_conftest_found_with_double_dash(testdir):
     )
 
 
-class TestConftestVisibility(object):
+class TestConftestVisibility:
     def _setup_tree(self, testdir):  # for issue616
         # example mostly taken from:
         # https://mail.python.org/pipermail/pytest-dev/2014-September/002617.html
@@ -491,10 +485,10 @@ class TestConftestVisibility(object):
             ("snc", ".", 1),
         ],
     )
-    @pytest.mark.issue(616)
     def test_parsefactories_relative_node_ids(
         self, testdir, chdir, testarg, expect_ntests_passed
     ):
+        """#616"""
         dirs = self._setup_tree(testdir)
         print("pytest run in cwd: %s" % (dirs[chdir].relto(testdir.tmpdir)))
         print("pytestarg        : %s" % (testarg))

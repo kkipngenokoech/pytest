@@ -28,7 +28,7 @@ Running pytest now produces this output:
 
     $ pytest test_show_warnings.py
     =========================== test session starts ============================
-    platform linux -- Python 3.x.y, pytest-4.x.y, py-1.x.y, pluggy-0.x.y
+    platform linux -- Python 3.x.y, pytest-5.x.y, py-1.x.y, pluggy-0.x.y
     cachedir: $PYTHON_PREFIX/.pytest_cache
     rootdir: $REGENDOC_TMPDIR
     collected 1 item
@@ -127,7 +127,7 @@ decorator or to all tests in a module by setting the ``pytestmark`` variable:
 *Credits go to Florian Schulze for the reference implementation in the* `pytest-warnings`_
 *plugin.*
 
-.. _`-W option`: https://docs.python.org/3/using/cmdline.html?highlight=#cmdoption-W
+.. _`-W option`: https://docs.python.org/3/using/cmdline.html#cmdoption-w
 .. _warnings.simplefilter: https://docs.python.org/3/library/warnings.html#warnings.simplefilter
 .. _`pytest-warnings`: https://github.com/fschulze/pytest-warnings
 
@@ -400,7 +400,7 @@ defines an ``__init__`` constructor, as this prevents the class from being insta
 
     ============================= warnings summary =============================
     test_pytest_warnings.py:1
-      $REGENDOC_TMPDIR/test_pytest_warnings.py:1: PytestWarning: cannot collect test class 'Test' because it has a __init__ constructor
+      $REGENDOC_TMPDIR/test_pytest_warnings.py:1: PytestCollectionWarning: cannot collect test class 'Test' because it has a __init__ constructor (from: test_pytest_warnings.py)
         class Test:
 
     -- Docs: https://docs.pytest.org/en/latest/warnings.html
@@ -430,5 +430,3 @@ The following warning types ares used by pytest and are part of the public API:
 .. autoclass:: pytest.PytestUnhandledCoroutineWarning
 
 .. autoclass:: pytest.PytestUnknownMarkWarning
-
-.. autoclass:: pytest.RemovedInPytest4Warning
