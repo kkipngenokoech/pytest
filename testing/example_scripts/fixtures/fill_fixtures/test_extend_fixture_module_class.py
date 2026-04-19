@@ -1,3 +1,6 @@
+# mypy: allow-untyped-defs
+from __future__ import annotations
+
 import pytest
 
 
@@ -6,7 +9,7 @@ def spam():
     return "spam"
 
 
-class TestSpam(object):
+class TestSpam:
     @pytest.fixture
     def spam(self, spam):
         return spam * 2

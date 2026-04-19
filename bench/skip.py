@@ -1,6 +1,7 @@
-from six.moves import range
+from __future__ import annotations
 
 import pytest
+
 
 SKIP = True
 

@@ -1,7 +1,11 @@
-import json
+from __future__ import annotations
 
-import py
+import json
+from pathlib import Path
+import sys
+
 import requests
+
 
 issues_url = "https://api.github.com/repos/pytest-dev/pytest/issues"
 
@@ -16,7 +20,7 @@ def get_issues():
         if r.status_code == 403:
             # API request limit exceeded
             print(data["message"])
-            exit(1)
+            sys.exit(1)
         issues.extend(data)
 
         # Look for next page
@@ -31,12 +35,12 @@ def get_issues():
 
 
 def main(args):
-    cachefile = py.path.local(args.cache)
+    cachefile = Path(args.cache)
     if not cachefile.exists() or args.refresh:
         issues = get_issues()
-        cachefile.write(json.dumps(issues))
+        cachefile.write_text(json.dumps(issues), "utf-8")
     else:
-        issues = json.loads(cachefile.read())
+        issues = json.loads(cachefile.read_text("utf-8"))
 
     open_issues = [x for x in issues if x["state"] == "open"]
 
@@ -45,7 +49,7 @@ def main(args):
 
 
 def _get_kind(issue):
-    labels = [l["name"] for l in issue["labels"]]
+    labels = [label["name"] for label in issue["labels"]]
     for key in ("bug", "enhancement", "proposal"):
         if key in labels:
             return key
@@ -59,7 +63,7 @@ def report(issues):
         kind = _get_kind(issue)
         status = issue["state"]
         number = issue["number"]
-        link = "https://github.com/pytest-dev/pytest/issues/%s/" % number
+        link = f"https://github.com/pytest-dev/pytest/issues/{number}/"
         print("----")
         print(status, kind, link)
         print(title)
@@ -68,7 +72,7 @@ def report(issues):
         # print("\n".join(lines[:3]))
         # if len(lines) > 3 or len(body) > 240:
         #    print("...")
-    print("\n\nFound %s open issues" % len(issues))
+    print(f"\n\nFound {len(issues)} open issues")
 
 
 if __name__ == "__main__":

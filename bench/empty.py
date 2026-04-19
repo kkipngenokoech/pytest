@@ -1,4 +1,5 @@
-import six
+from __future__ import annotations
+
 
 for i in range(1000):
-    six.exec_("def test_func_%d(): pass" % i)
+    exec(f"def test_func_{i}(): pass")

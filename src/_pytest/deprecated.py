@@ -1,95 +1,99 @@
-"""
-This module contains deprecation messages and bits of code used elsewhere in the codebase
-that is planned to be removed in the next pytest release.
+"""Deprecation messages and bits of code used elsewhere in the codebase that
+is planned to be removed in the next pytest release.
 
 Keeping it in a central location makes it easy to track what is deprecated and should
 be removed when the time comes.
 
-All constants defined in this module should be either PytestWarning instances or UnformattedWarning
+All constants defined in this module should be either instances of
+:class:`PytestWarning`, or :class:`UnformattedWarning`
 in case of warnings which need to format their messages.
 """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+
+from __future__ import annotations
+
+from warnings import warn
 
 from _pytest.warning_types import PytestDeprecationWarning
-from _pytest.warning_types import RemovedInPytest4Warning
+from _pytest.warning_types import PytestRemovedIn10Warning
 from _pytest.warning_types import UnformattedWarning
 
-YIELD_TESTS = "yield tests were removed in pytest 4.0 - {name} will be ignored"
+
+# set of plugins which have been integrated into the core; we use this list to ignore
+# them during registration to avoid conflicts
+DEPRECATED_EXTERNAL_PLUGINS = {
+    "pytest_catchlog",
+    "pytest_capturelog",
+    "pytest_faulthandler",
+    "pytest_subtests",
+}
 
 
-FIXTURE_FUNCTION_CALL = (
-    'Fixture "{name}" called directly. Fixtures are not meant to be called directly,\n'
-    "but are created automatically when test functions request them as parameters.\n"
-    "See https://docs.pytest.org/en/latest/fixture.html for more information about fixtures, and\n"
-    "https://docs.pytest.org/en/latest/deprecations.html#calling-fixtures-directly about how to update your code."
+# This could have been removed pytest 8, but it's harmless and common, so no rush to remove.
+YIELD_FIXTURE = PytestDeprecationWarning(
+    "@pytest.yield_fixture is deprecated.\n"
+    "Use @pytest.fixture instead; they are the same."
 )
 
-FIXTURE_NAMED_REQUEST = PytestDeprecationWarning(
-    "'request' is a reserved name for fixtures and will raise an error in future versions"
+# This deprecation is never really meant to be removed.
+PRIVATE = PytestDeprecationWarning("A private pytest class or function was used.")
+
+
+HOOK_LEGACY_MARKING = UnformattedWarning(
+    PytestRemovedIn10Warning,
+    "The hook{type} {fullname} uses old-style configuration options (marks or attributes).\n"
+    "Please use the pytest.hook{type}({hook_opts}) decorator instead\n"
+    " to configure the hooks.\n"
+    " See https://docs.pytest.org/en/latest/deprecations.html"
+    "#configuring-hook-specs-impls-using-markers",
 )
 
-CFG_PYTEST_SECTION = "[pytest] section in {filename} files is no longer supported, change to [tool:pytest] instead."
-
-GETFUNCARGVALUE = RemovedInPytest4Warning(
-    "getfuncargvalue is deprecated, use getfixturevalue"
+MONKEYPATCH_LEGACY_NAMESPACE_PACKAGES = PytestRemovedIn10Warning(
+    "monkeypatch.syspath_prepend() called with pkg_resources legacy namespace packages detected.\n"
+    "Legacy namespace packages (using pkg_resources.declare_namespace) are deprecated.\n"
+    "Please use native namespace packages (PEP 420) instead.\n"
+    "See https://docs.pytest.org/en/stable/deprecations.html#monkeypatch-fixup-namespace-packages"
 )
 
-RAISES_MESSAGE_PARAMETER = PytestDeprecationWarning(
-    "The 'message' parameter is deprecated.\n"
-    "(did you mean to use `match='some regex'` to check the exception message?)\n"
-    "Please comment on https://github.com/pytest-dev/pytest/issues/3974 "
-    "if you have concerns about removal of this parameter."
+PARAMETRIZE_NON_COLLECTION_ITERABLE = UnformattedWarning(
+    PytestRemovedIn10Warning,
+    "Passing a non-Collection iterable to parametrize is deprecated.\n"
+    "Test: {nodeid}, argvalues type: {type_name}\n"
+    "Please convert to a list or tuple.\n"
+    "See https://docs.pytest.org/en/stable/deprecations.html#parametrize-iterators",
 )
 
-RESULT_LOG = PytestDeprecationWarning(
-    "--result-log is deprecated and scheduled for removal in pytest 5.0.\n"
-    "See https://docs.pytest.org/en/latest/deprecations.html#result-log-result-log for more information."
+CONFIG_INICFG = PytestRemovedIn10Warning(
+    "config.inicfg is deprecated, use config.getini() to access configuration values instead.\n"
+    "See https://docs.pytest.org/en/stable/deprecations.html#config-inicfg"
 )
 
-RAISES_EXEC = PytestDeprecationWarning(
-    "raises(..., 'code(as_a_string)') is deprecated, use the context manager form or use `exec()` directly\n\n"
-    "See https://docs.pytest.org/en/latest/deprecations.html#raises-warns-exec"
-)
-WARNS_EXEC = PytestDeprecationWarning(
-    "warns(..., 'code(as_a_string)') is deprecated, use the context manager form or use `exec()` directly.\n\n"
-    "See https://docs.pytest.org/en/latest/deprecations.html#raises-warns-exec"
-)
-
-PYTEST_PLUGINS_FROM_NON_TOP_LEVEL_CONFTEST = (
-    "Defining 'pytest_plugins' in a non-top-level conftest is no longer supported "
-    "because it affects the entire directory tree in a non-explicit way.\n"
-    "  {}\n"
-    "Please move it to a top level conftest file at the rootdir:\n"
-    "  {}\n"
-    "For more information, visit:\n"
-    "  https://docs.pytest.org/en/latest/deprecations.html#pytest-plugins-in-non-top-level-conftest-files"
+FIXTURE_GETFIXTUREVALUE_DURING_TEARDOWN = UnformattedWarning(
+    PytestRemovedIn10Warning,
+    'Calling request.getfixturevalue("{argname}") during teardown is deprecated.\n'
+    "Please request the fixture before teardown begins, either by declaring it in the fixture signature "
+    "or by calling request.getfixturevalue() before the fixture yields.\n"
+    "See https://docs.pytest.org/en/stable/deprecations.html#dynamic-fixture-request-during-teardown",
 )
 
-PYTEST_CONFIG_GLOBAL = PytestDeprecationWarning(
-    "the `pytest.config` global is deprecated.  Please use `request.config` "
-    "or `pytest_configure` (if you're a pytest plugin) instead."
-)
+# You want to make some `__init__` or function "private".
+#
+#   def my_private_function(some, args):
+#       ...
+#
+# Do this:
+#
+#   def my_private_function(some, args, *, _ispytest: bool = False):
+#       check_ispytest(_ispytest)
+#       ...
+#
+# Change all internal/allowed calls to
+#
+#   my_private_function(some, args, _ispytest=True)
+#
+# All other calls will get the default _ispytest=False and trigger
+# the warning (possibly error in the future).
 
-PYTEST_ENSURETEMP = RemovedInPytest4Warning(
-    "pytest/tmpdir_factory.ensuretemp is deprecated, \n"
-    "please use the tmp_path fixture or tmp_path_factory.mktemp"
-)
 
-PYTEST_LOGWARNING = PytestDeprecationWarning(
-    "pytest_logwarning is deprecated, no longer being called, and will be removed soon\n"
-    "please use pytest_warning_captured instead"
-)
-
-PYTEST_WARNS_UNKNOWN_KWARGS = UnformattedWarning(
-    PytestDeprecationWarning,
-    "pytest.warns() got unexpected keyword arguments: {args!r}.\n"
-    "This will be an error in future versions.",
-)
-
-PYTEST_PARAM_UNKNOWN_KWARGS = UnformattedWarning(
-    PytestDeprecationWarning,
-    "pytest.param() got unexpected keyword arguments: {args!r}.\n"
-    "This will be an error in future versions.",
-)
+def check_ispytest(ispytest: bool) -> None:
+    if not ispytest:
+        warn(PRIVATE, stacklevel=3)

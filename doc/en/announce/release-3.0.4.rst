@@ -8,13 +8,13 @@ being a drop-in replacement. To upgrade::
 
   pip install --upgrade pytest
 
-The changelog is available at http://doc.pytest.org/en/latest/changelog.html.
+The changelog is available at http://doc.pytest.org/en/stable/changelog.html.
 
 Thanks to all who contributed to this release, among them:
 
 * Bruno Oliveira
 * Dan Wandschneider
-* Florian Bruhin
+* Freya Bruhin
 * Georgy Dyuldin
 * Grigorii Eremeev
 * Jason R. Coombs
