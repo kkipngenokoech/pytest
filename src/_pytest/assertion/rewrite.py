@@ -745,6 +745,25 @@ class AssertionRewriter(ast.NodeVisitor):
     def is_rewrite_disabled(docstring: str) -> bool:
         return "PYTEST_DONT_REWRITE" in docstring
 
+    def _is_docstring(self, node: ast.stmt) -> bool:
+        """Check if a statement node represents a docstring.
+        
+        A docstring must be:
+        1. An Expr node (expression statement)
+        2. Containing a Constant with a string value (or Str node for older Python)
+        3. Be the first statement in its containing scope
+        """
+        if not isinstance(node, ast.Expr):
+            return False
+        
+        # Check if the expression is a string constant
+        if isinstance(node.value, ast.Constant):
+            return isinstance(node.value.value, str)
+        elif isinstance(node.value, ast.Str):  # For Python < 3.8 compatibility
+            return True
+        
+        return False
+
     def variable(self) -> str:
         """Get a new variable."""
         # Use a character invalid in python identifiers to avoid clashing.
