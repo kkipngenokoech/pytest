@@ -4,16 +4,15 @@ from setuptools import setup
 #       remove _width_of_current_line in terminal.py
 INSTALL_REQUIRES = [
     "py>=1.5.0",
-    "six>=1.10.0",
-    "setuptools",
-    "attrs>=17.4.0",
-    'more-itertools>=4.0.0,<6.0.0;python_version<="2.7"',
-    'more-itertools>=4.0.0;python_version>"2.7"',
-    "atomicwrites>=1.0",
-    'funcsigs>=1.0;python_version<"3.0"',
+    "packaging",
+    "attrs>=17.4.0",  # should match oldattrs tox env.
+    "more-itertools>=4.0.0",
+    'atomicwrites>=1.0;sys_platform=="win32"',
     'pathlib2>=2.2.0;python_version<"3.6"',
     'colorama;sys_platform=="win32"',
-    "pluggy>=0.9",
+    "pluggy>=0.12,<1.0",
+    'importlib-metadata>=0.12;python_version<"3.8"',
+    "wcwidth",
 ]
 
 
@@ -22,17 +21,19 @@ def main():
         use_scm_version={"write_to": "src/_pytest/_version.py"},
         setup_requires=["setuptools-scm", "setuptools>=40.0"],
         package_dir={"": "src"},
-        # fmt: off
         extras_require={
             "testing": [
                 "argcomplete",
                 "hypothesis>=3.56",
+                "mock",
                 "nose",
                 "requests",
-                "mock;python_version=='2.7'",
+                "xmlschema",
+            ],
+            "checkqa-mypy": [
+                "mypy==v0.770",  # keep this in sync with .pre-commit-config.yaml.
             ],
         },
-        # fmt: on
         install_requires=INSTALL_REQUIRES,
     )
 

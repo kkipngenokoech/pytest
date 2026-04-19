@@ -35,7 +35,7 @@ holger krekel
 - fix issue435: make reload() work when assert rewriting is active.
   Thanks Daniel Hahler.
 
-- fix issue616: conftest.py files and their contained fixutres are now
+- fix issue616: conftest.py files and their contained fixtures are now
   properly considered for visibility, independently from the exact
   current working directory and test arguments that are used.
   Many thanks to Eric Siegerman and his PR235 which contains
@@ -52,7 +52,7 @@ holger krekel
 - add ability to set command line options by environment variable PYTEST_ADDOPTS.
 
 - added documentation on the new pytest-dev teams on bitbucket and
-  github.  See https://pytest.org/latest/contributing.html .
+  github.  See https://pytest.org/en/latest/contributing.html .
   Thanks to Anatoly for pushing and initial work on this.
 
 - fix issue650: new option ``--docttest-ignore-import-errors`` which

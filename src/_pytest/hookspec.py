@@ -1,7 +1,20 @@
 """ hook specifications for pytest plugins, invoked from main.py and builtin plugins.  """
+from typing import Any
+from typing import Mapping
+from typing import Optional
+from typing import Tuple
+from typing import Union
+
 from pluggy import HookspecMarker
 
-from _pytest.deprecated import PYTEST_LOGWARNING
+from .deprecated import COLLECT_DIRECTORY_HOOK
+from _pytest.compat import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from _pytest.config import Config
+    from _pytest.main import Session
+    from _pytest.reports import BaseReport
+
 
 hookspec = HookspecMarker("pytest")
 
@@ -36,7 +49,7 @@ def pytest_plugin_registered(plugin, manager):
 
 
 @hookspec(historic=True)
-def pytest_addoption(parser):
+def pytest_addoption(parser, pluginmanager):
     """register argparse-style options and ini-style config values,
     called once at the beginning of a test run.
 
@@ -46,10 +59,15 @@ def pytest_addoption(parser):
         files situated at the tests root directory due to how pytest
         :ref:`discovers plugins during startup <pluginorder>`.
 
-    :arg _pytest.config.Parser parser: To add command line options, call
-        :py:func:`parser.addoption(...) <_pytest.config.Parser.addoption>`.
+    :arg _pytest.config.argparsing.Parser parser: To add command line options, call
+        :py:func:`parser.addoption(...) <_pytest.config.argparsing.Parser.addoption>`.
         To add ini-file values call :py:func:`parser.addini(...)
-        <_pytest.config.Parser.addini>`.
+        <_pytest.config.argparsing.Parser.addini>`.
+
+    :arg _pytest.config.PytestPluginManager pluginmanager: pytest plugin manager,
+        which can be used to install :py:func:`hookspec`'s or :py:func:`hookimpl`'s
+        and allow one plugin to call another plugin's hooks to change how
+        command line options are added.
 
     Options can later be accessed through the
     :py:class:`config <_pytest.config.Config>` object, respectively:
@@ -144,7 +162,7 @@ def pytest_load_initial_conftests(early_config, parser, args):
 
     :param _pytest.config.Config early_config: pytest config object
     :param list[str] args: list of arguments passed on the command line
-    :param _pytest.config.Parser parser: to add command line options
+    :param _pytest.config.argparsing.Parser parser: to add command line options
     """
 
 
@@ -154,10 +172,25 @@ def pytest_load_initial_conftests(early_config, parser, args):
 
 
 @hookspec(firstresult=True)
-def pytest_collection(session):
+def pytest_collection(session: "Session") -> Optional[Any]:
     """Perform the collection protocol for the given session.
 
     Stops at first non-None result, see :ref:`firstresult`.
+    The return value is not used, but only stops further processing.
+
+    The hook is meant to set `session.items` to a sequence of items at least,
+    but normally should follow this procedure:
+
+      1. Call the pytest_collectstart hook.
+      2. Call the pytest_collectreport hook.
+      3. Call the pytest_collection_modifyitems hook.
+      4. Call the pytest_collection_finish hook.
+      5. Set session.testscollected to the amount of collect items.
+      6. Set `session.items` to a list of items.
+
+    You can implement this hook to only perform some action before collection,
+    for example the terminal plugin uses it to start displaying the collection
+    counter (and returns `None`).
 
     :param _pytest.main.Session session: the pytest session object
     """
@@ -193,7 +226,7 @@ def pytest_ignore_collect(path, config):
     """
 
 
-@hookspec(firstresult=True)
+@hookspec(firstresult=True, warn_on_impl=COLLECT_DIRECTORY_HOOK)
 def pytest_collect_directory(path, parent):
     """ called before traversing a directory for collection files.
 
@@ -303,10 +336,6 @@ def pytest_runtestloop(session):
     """
 
 
-def pytest_itemstart(item, node):
-    """(**Deprecated**) use pytest_runtest_logstart. """
-
-
 @hookspec(firstresult=True)
 def pytest_runtest_protocol(item, nextitem):
     """ implements the runtest_setup/call/teardown protocol for
@@ -382,16 +411,6 @@ def pytest_runtest_logreport(report):
 @hookspec(firstresult=True)
 def pytest_report_to_serializable(config, report):
     """
-    .. warning::
-        This hook is experimental and subject to change between pytest releases, even
-        bug fixes.
-
-        The intent is for this to be used by plugins maintained by the core-devs, such
-        as ``pytest-xdist``, ``pytest-subtests``, and as a replacement for the internal
-        'resultlog' plugin.
-
-        In the future it might become part of the public hook API.
-
     Serializes the given report object into a data structure suitable for sending
     over the wire, e.g. converted to JSON.
     """
@@ -400,16 +419,6 @@ def pytest_report_to_serializable(config, report):
 @hookspec(firstresult=True)
 def pytest_report_from_serializable(config, data):
     """
-    .. warning::
-        This hook is experimental and subject to change between pytest releases, even
-        bug fixes.
-
-        The intent is for this to be used by plugins maintained by the core-devs, such
-        as ``pytest-xdist``, ``pytest-subtests``, and as a replacement for the internal
-        'resultlog' plugin.
-
-        In the future it might become part of the public hook API.
-
     Restores a report object previously serialized with pytest_report_to_serializable().
     """
 
@@ -435,9 +444,9 @@ def pytest_fixture_setup(fixturedef, request):
 
 
 def pytest_fixture_post_finalizer(fixturedef, request):
-    """ called after fixture teardown, but before the cache is cleared so
-    the fixture result cache ``fixturedef.cached_result`` can
-    still be accessed."""
+    """Called after fixture teardown, but before the cache is cleared, so
+    the fixture result ``fixturedef.cached_result`` is still available (not
+    ``None``)."""
 
 
 # -------------------------------------------------------------------------
@@ -485,6 +494,44 @@ def pytest_assertrepr_compare(config, op, left, right):
     """
 
 
+def pytest_assertion_pass(item, lineno, orig, expl):
+    """
+    **(Experimental)**
+
+    .. versionadded:: 5.0
+
+    Hook called whenever an assertion *passes*.
+
+    Use this hook to do some processing after a passing assertion.
+    The original assertion information is available in the `orig` string
+    and the pytest introspected assertion information is available in the
+    `expl` string.
+
+    This hook must be explicitly enabled by the ``enable_assertion_pass_hook``
+    ini-file option:
+
+    .. code-block:: ini
+
+        [pytest]
+        enable_assertion_pass_hook=true
+
+    You need to **clean the .pyc** files in your project directory and interpreter libraries
+    when enabling this option, as assertions will require to be re-written.
+
+    :param _pytest.nodes.Item item: pytest item object of current test
+    :param int lineno: line number of the assert statement
+    :param string orig: string with original assertion
+    :param string expl: string with assert explanation
+
+    .. note::
+
+        This hook is **experimental**, so its parameters or even the hook itself might
+        be changed/removed without warning in any future pytest release.
+
+        If you find this hook useful, please share your feedback opening an issue.
+    """
+
+
 # -------------------------------------------------------------------------
 # hooks for influencing reporting (invoked from _pytest_terminal)
 # -------------------------------------------------------------------------
@@ -495,6 +542,13 @@ def pytest_report_header(config, startdir):
 
     :param _pytest.config.Config config: pytest config object
     :param startdir: py.path object with the starting dir
+
+    .. note::
+
+        Lines returned by a plugin are displayed before those of plugins which
+        ran before it.
+        If you want to have your line(s) displayed first, use
+        :ref:`trylast=True <plugin-hookorder>`.
 
     .. note::
 
@@ -510,21 +564,48 @@ def pytest_report_collectionfinish(config, startdir, items):
 
     return a string or list of strings to be displayed after collection has finished successfully.
 
-    This strings will be displayed after the standard "collected X items" message.
+    These strings will be displayed after the standard "collected X items" message.
 
     :param _pytest.config.Config config: pytest config object
     :param startdir: py.path object with the starting dir
     :param items: list of pytest items that are going to be executed; this list should not be modified.
+
+    .. note::
+
+        Lines returned by a plugin are displayed before those of plugins which
+        ran before it.
+        If you want to have your line(s) displayed first, use
+        :ref:`trylast=True <plugin-hookorder>`.
     """
 
 
 @hookspec(firstresult=True)
-def pytest_report_teststatus(report, config):
-    """ return result-category, shortletter and verbose word for reporting.
+def pytest_report_teststatus(
+    report: "BaseReport", config: "Config"
+) -> Tuple[
+    str, str, Union[str, Mapping[str, bool]],
+]:
+    """Return result-category, shortletter and verbose word for status
+    reporting.
 
-    :param _pytest.config.Config config: pytest config object
+    The result-category is a category in which to count the result, for
+    example "passed", "skipped", "error" or the empty string.
 
-    Stops at first non-None result, see :ref:`firstresult` """
+    The shortletter is shown as testing progresses, for example ".", "s",
+    "E" or the empty string.
+
+    The verbose word is shown as testing progresses in verbose mode, for
+    example "PASSED", "SKIPPED", "ERROR" or the empty string.
+
+    pytest may style these implicitly according to the report outcome.
+    To provide explicit styling, return a tuple for the verbose word,
+    for example ``"rerun", "R", ("RERUN", {"yellow": True})``.
+
+    :param report: The report object whose status is to be returned.
+    :param _pytest.config.Config config: The pytest config object.
+
+    Stops at first non-None result, see :ref:`firstresult`.
+    """
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -539,29 +620,8 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     """
 
 
-@hookspec(historic=True, warn_on_impl=PYTEST_LOGWARNING)
-def pytest_logwarning(message, code, nodeid, fslocation):
-    """
-    .. deprecated:: 3.8
-
-        This hook is will stop working in a future release.
-
-        pytest no longer triggers this hook, but the
-        terminal writer still implements it to display warnings issued by
-        :meth:`_pytest.config.Config.warn` and :meth:`_pytest.nodes.Node.warn`. Calling those functions will be
-        an error in future releases.
-
-    process a warning specified by a message, a code string,
-    a nodeid and fslocation (both of which may be None
-    if the warning is not tied to a particular node/location).
-
-    .. note::
-        This hook is incompatible with ``hookwrapper=True``.
-    """
-
-
 @hookspec(historic=True)
-def pytest_warning_captured(warning_message, when, item):
+def pytest_warning_captured(warning_message, when, item, location):
     """
     Process a warning captured by the internal pytest warnings plugin.
 
@@ -581,6 +641,10 @@ def pytest_warning_captured(warning_message, when, item):
         in a future release.
 
         The item being executed if ``when`` is ``"runtest"``, otherwise ``None``.
+
+    :param tuple location:
+        Holds information about the execution context of the captured warning (filename, linenumber, function).
+        ``function`` evaluates to <module> when the execution context is at the module level.
     """
 
 

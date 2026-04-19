@@ -1,25 +1,29 @@
-# -*- coding: utf8 -*-
-from __future__ import unicode_literals
-
-import sys
+import os
 import warnings
 
-import six
-
 import pytest
+from _pytest.fixtures import FixtureRequest
+from _pytest.pytester import Testdir
 
 WARNINGS_SUMMARY_HEADER = "warnings summary"
 
 
 @pytest.fixture
-def pyfile_with_warnings(testdir, request):
+def pyfile_with_warnings(testdir: Testdir, request: FixtureRequest) -> str:
     """
     Create a test file which calls a function in a module which generates warnings.
     """
     testdir.syspathinsert()
     test_name = request.function.__name__
     module_name = test_name.lstrip("test_") + "_module"
-    testdir.makepyfile(
+    test_file = testdir.makepyfile(
+        """
+        import {module_name}
+        def test_func():
+            assert {module_name}.foo() == 1
+        """.format(
+            module_name=module_name
+        ),
         **{
             module_name: """
             import warnings
@@ -27,16 +31,10 @@ def pyfile_with_warnings(testdir, request):
                 warnings.warn(UserWarning("user warning"))
                 warnings.warn(RuntimeWarning("runtime warning"))
                 return 1
-        """,
-            test_name: """
-            import {module_name}
-            def test_func():
-                assert {module_name}.foo() == 1
-        """.format(
-                module_name=module_name
-            ),
-        }
+            """,
+        },
     )
+    return str(test_file)
 
 
 @pytest.mark.filterwarnings("default")
@@ -44,7 +42,7 @@ def test_normal_flow(testdir, pyfile_with_warnings):
     """
     Check that the warnings section is displayed.
     """
-    result = testdir.runpytest()
+    result = testdir.runpytest(pyfile_with_warnings)
     result.stdout.fnmatch_lines(
         [
             "*== %s ==*" % WARNINGS_SUMMARY_HEADER,
@@ -59,7 +57,7 @@ def test_normal_flow(testdir, pyfile_with_warnings):
 
 
 @pytest.mark.filterwarnings("always")
-def test_setup_teardown_warnings(testdir, pyfile_with_warnings):
+def test_setup_teardown_warnings(testdir):
     testdir.makepyfile(
         """
         import warnings
@@ -100,7 +98,7 @@ def test_as_errors(testdir, pyfile_with_warnings, method):
         )
     # Use a subprocess, since changing logging level affects other threads
     # (xdist).
-    result = testdir.runpytest_subprocess(*args)
+    result = testdir.runpytest_subprocess(*args, pyfile_with_warnings)
     result.stdout.fnmatch_lines(
         [
             "E       UserWarning: user warning",
@@ -121,100 +119,34 @@ def test_ignore(testdir, pyfile_with_warnings, method):
         """
         )
 
-    result = testdir.runpytest(*args)
+    result = testdir.runpytest(*args, pyfile_with_warnings)
     result.stdout.fnmatch_lines(["* 1 passed in *"])
     assert WARNINGS_SUMMARY_HEADER not in result.stdout.str()
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 0), reason="warnings message is unicode is ok in python3"
-)
 @pytest.mark.filterwarnings("always")
-def test_unicode(testdir, pyfile_with_warnings):
+def test_unicode(testdir):
     testdir.makepyfile(
         """
-        # -*- coding: utf8 -*-
         import warnings
         import pytest
 
 
         @pytest.fixture
         def fix():
-            warnings.warn(u"测试")
+            warnings.warn("测试")
             yield
 
         def test_func(fix):
             pass
-    """
-    )
-    result = testdir.runpytest()
-    result.stdout.fnmatch_lines(
-        [
-            "*== %s ==*" % WARNINGS_SUMMARY_HEADER,
-            "*test_unicode.py:8: UserWarning: \u6d4b\u8bd5*",
-            "* 1 passed, 1 warnings*",
-        ]
-    )
-
-
-@pytest.mark.skipif(
-    sys.version_info >= (3, 0),
-    reason="warnings message is broken as it is not str instance",
-)
-def test_py2_unicode(testdir, pyfile_with_warnings):
-    if getattr(sys, "pypy_version_info", ())[:2] == (5, 9) and sys.platform.startswith(
-        "win"
-    ):
-        pytest.xfail("fails with unicode error on PyPy2 5.9 and Windows (#2905)")
-    testdir.makepyfile(
         """
-        # -*- coding: utf8 -*-
-        import warnings
-        import pytest
-
-
-        @pytest.fixture
-        def fix():
-            warnings.warn(u"测试")
-            yield
-
-        @pytest.mark.filterwarnings('always')
-        def test_func(fix):
-            pass
-    """
     )
     result = testdir.runpytest()
     result.stdout.fnmatch_lines(
         [
             "*== %s ==*" % WARNINGS_SUMMARY_HEADER,
-            "*test_py2_unicode.py:8: UserWarning: \\u6d4b\\u8bd5",
-            '*warnings.warn(u"\u6d4b\u8bd5")',
-            "*warnings.py:*: UnicodeWarning: Warning is using unicode non*",
-            "* 1 passed, 2 warnings*",
-        ]
-    )
-
-
-def test_py2_unicode_ascii(testdir):
-    """Ensure that our warning about 'unicode warnings containing non-ascii messages'
-    does not trigger with ascii-convertible messages"""
-    testdir.makeini("[pytest]")
-    testdir.makepyfile(
-        """
-        import pytest
-        import warnings
-
-        @pytest.mark.filterwarnings('always')
-        def test_func():
-            warnings.warn(u"hello")
-    """
-    )
-    result = testdir.runpytest()
-    result.stdout.fnmatch_lines(
-        [
-            "*== %s ==*" % WARNINGS_SUMMARY_HEADER,
-            '*warnings.warn(u"hello")',
-            "* 1 passed, 1 warnings in*",
+            "*test_unicode.py:7: UserWarning: \u6d4b\u8bd5*",
+            "* 1 passed, 1 warning*",
         ]
     )
 
@@ -273,22 +205,22 @@ def test_filterwarnings_mark(testdir, default_config):
     """
     )
     result = testdir.runpytest("-W always" if default_config == "cmdline" else "")
-    result.stdout.fnmatch_lines(["*= 1 failed, 2 passed, 1 warnings in *"])
+    result.stdout.fnmatch_lines(["*= 1 failed, 2 passed, 1 warning in *"])
 
 
 def test_non_string_warning_argument(testdir):
     """Non-str argument passed to warning breaks pytest (#2956)"""
     testdir.makepyfile(
-        """
+        """\
         import warnings
         import pytest
 
         def test():
-            warnings.warn(UserWarning(1, u'foo'))
-    """
+            warnings.warn(UserWarning(1, 'foo'))
+        """
     )
     result = testdir.runpytest("-W", "always")
-    result.stdout.fnmatch_lines(["*= 1 passed, 1 warnings in *"])
+    result.stdout.fnmatch_lines(["*= 1 passed, 1 warning in *"])
 
 
 def test_filterwarnings_mark_registration(testdir):
@@ -302,7 +234,7 @@ def test_filterwarnings_mark_registration(testdir):
             pass
     """
     )
-    result = testdir.runpytest("--strict")
+    result = testdir.runpytest("--strict-markers")
     assert result.ret == 0
 
 
@@ -374,7 +306,7 @@ def test_collection_warnings(testdir):
             "*== %s ==*" % WARNINGS_SUMMARY_HEADER,
             "  *collection_warnings.py:3: UserWarning: collection warning",
             '    warnings.warn(UserWarning("collection warning"))',
-            "* 1 passed, 1 warnings*",
+            "* 1 passed, 1 warning*",
         ]
     )
 
@@ -430,7 +362,7 @@ def test_hide_pytest_internal_warnings(testdir, ignore_pytest_warnings):
             [
                 "*== %s ==*" % WARNINGS_SUMMARY_HEADER,
                 "*test_hide_pytest_internal_warnings.py:4: PytestWarning: some internal warning",
-                "* 1 passed, 1 warnings *",
+                "* 1 passed, 1 warning *",
             ]
         )
 
@@ -548,7 +480,7 @@ class TestDeprecationWarningsByDefault:
             [
                 "*== %s ==*" % WARNINGS_SUMMARY_HEADER,
                 "*test_hidden_by_mark.py:3: DeprecationWarning: collection",
-                "* 1 passed, 1 warnings*",
+                "* 1 passed, 1 warning*",
             ]
         )
 
@@ -564,45 +496,26 @@ class TestDeprecationWarningsByDefault:
 
     def test_hidden_by_system(self, testdir, monkeypatch):
         self.create_file(testdir)
-        monkeypatch.setenv(str("PYTHONWARNINGS"), str("once::UserWarning"))
+        monkeypatch.setenv("PYTHONWARNINGS", "once::UserWarning")
         result = testdir.runpytest_subprocess()
         assert WARNINGS_SUMMARY_HEADER not in result.stdout.str()
 
 
-@pytest.mark.skipif(six.PY3, reason="Python 2 only issue")
-def test_infinite_loop_warning_against_unicode_usage_py2(testdir):
-    """
-    We need to be careful when raising the warning about unicode usage with "warnings.warn"
-    because it might be overwritten by users and this itself causes another warning (#3691).
-    """
-    testdir.makepyfile(
-        """
-        # -*- coding: utf8 -*-
-        from __future__ import unicode_literals
-        import warnings
-        import pytest
-
-        def _custom_showwarning(message, *a, **b):
-            return "WARNING: {}".format(message)
-
-        warnings.formatwarning = _custom_showwarning
-
-        @pytest.mark.filterwarnings("default")
-        def test_custom_warning_formatter():
-            warnings.warn("¥")
-    """
-    )
-    result = testdir.runpytest_subprocess()
-    result.stdout.fnmatch_lines(["*1 passed, * warnings in*"])
-
-
 @pytest.mark.parametrize("change_default", [None, "ini", "cmdline"])
-def test_removed_in_pytest4_warning_as_error(testdir, change_default):
+@pytest.mark.skip(
+    reason="This test should be enabled again before pytest 6.0 is released"
+)
+def test_deprecation_warning_as_error(testdir, change_default):
+    """This ensures that PytestDeprecationWarnings raised by pytest are turned into errors.
+
+    This test should be enabled as part of each major release, and skipped again afterwards
+    to ensure our deprecations are turning into warnings as expected.
+    """
     testdir.makepyfile(
         """
         import warnings, pytest
         def test():
-            warnings.warn(pytest.RemovedInPytest4Warning("some warning"))
+            warnings.warn(pytest.PytestDeprecationWarning("some warning"))
     """
     )
     if change_default == "ini":
@@ -610,12 +523,12 @@ def test_removed_in_pytest4_warning_as_error(testdir, change_default):
             """
             [pytest]
             filterwarnings =
-                ignore::pytest.RemovedInPytest4Warning
+                ignore::pytest.PytestDeprecationWarning
         """
         )
 
     args = (
-        ("-Wignore::pytest.RemovedInPytest4Warning",)
+        ("-Wignore::pytest.PytestDeprecationWarning",)
         if change_default == "cmdline"
         else ()
     )
@@ -634,7 +547,7 @@ class TestAssertionWarnings:
 
     def test_tuple_warning(self, testdir):
         testdir.makepyfile(
-            """
+            """\
             def test_foo():
                 assert (1,2)
             """
@@ -643,48 +556,6 @@ class TestAssertionWarnings:
         self.assert_result_warns(
             result, "assertion is always true, perhaps remove parentheses?"
         )
-
-    @staticmethod
-    def create_file(testdir, return_none):
-        testdir.makepyfile(
-            """
-            def foo(return_none):
-                if return_none:
-                    return None
-                else:
-                    return False
-
-            def test_foo():
-                assert foo({return_none})
-            """.format(
-                return_none=return_none
-            )
-        )
-
-    def test_none_function_warns(self, testdir):
-        self.create_file(testdir, True)
-        result = testdir.runpytest()
-        self.assert_result_warns(
-            result, 'asserting the value None, please use "assert is None"'
-        )
-
-    def test_assert_is_none_no_warn(self, testdir):
-        testdir.makepyfile(
-            """
-            def foo():
-                return None
-
-            def test_foo():
-                assert foo() is None
-            """
-        )
-        result = testdir.runpytest()
-        result.stdout.fnmatch_lines(["*1 passed in*"])
-
-    def test_false_function_no_warn(self, testdir):
-        self.create_file(testdir, False)
-        result = testdir.runpytest()
-        result.stdout.fnmatch_lines(["*1 failed in*"])
 
 
 def test_warnings_checker_twice():
@@ -696,20 +567,209 @@ def test_warnings_checker_twice():
         warnings.warn("Message B", UserWarning)
 
 
+@pytest.mark.filterwarnings("ignore::pytest.PytestExperimentalApiWarning")
 @pytest.mark.filterwarnings("always")
 def test_group_warnings_by_message(testdir):
     testdir.copy_example("warnings/test_group_warnings_by_message.py")
     result = testdir.runpytest()
     result.stdout.fnmatch_lines(
         [
-            "test_group_warnings_by_message.py::test_foo[0]",
-            "test_group_warnings_by_message.py::test_foo[1]",
-            "test_group_warnings_by_message.py::test_foo[2]",
-            "test_group_warnings_by_message.py::test_foo[3]",
-            "test_group_warnings_by_message.py::test_foo[4]",
-            "test_group_warnings_by_message.py::test_bar",
-        ]
+            "*== %s ==*" % WARNINGS_SUMMARY_HEADER,
+            "test_group_warnings_by_message.py::test_foo[[]0[]]",
+            "test_group_warnings_by_message.py::test_foo[[]1[]]",
+            "test_group_warnings_by_message.py::test_foo[[]2[]]",
+            "test_group_warnings_by_message.py::test_foo[[]3[]]",
+            "test_group_warnings_by_message.py::test_foo[[]4[]]",
+            "test_group_warnings_by_message.py::test_foo_1",
+            "  */test_group_warnings_by_message.py:*: UserWarning: foo",
+            "    warnings.warn(UserWarning(msg))",
+            "",
+            "test_group_warnings_by_message.py::test_bar[[]0[]]",
+            "test_group_warnings_by_message.py::test_bar[[]1[]]",
+            "test_group_warnings_by_message.py::test_bar[[]2[]]",
+            "test_group_warnings_by_message.py::test_bar[[]3[]]",
+            "test_group_warnings_by_message.py::test_bar[[]4[]]",
+            "  */test_group_warnings_by_message.py:*: UserWarning: bar",
+            "    warnings.warn(UserWarning(msg))",
+            "",
+            "-- Docs: *",
+            "*= 11 passed, 11 warnings *",
+        ],
+        consecutive=True,
     )
-    warning_code = 'warnings.warn(UserWarning("foo"))'
-    assert warning_code in result.stdout.str()
-    assert result.stdout.str().count(warning_code) == 1
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestExperimentalApiWarning")
+@pytest.mark.filterwarnings("always")
+def test_group_warnings_by_message_summary(testdir):
+    testdir.copy_example("warnings/test_group_warnings_by_message_summary")
+    testdir.syspathinsert()
+    result = testdir.runpytest()
+    result.stdout.fnmatch_lines(
+        [
+            "*== %s ==*" % WARNINGS_SUMMARY_HEADER,
+            "test_1.py: 21 warnings",
+            "test_2.py: 1 warning",
+            "  */test_1.py:7: UserWarning: foo",
+            "    warnings.warn(UserWarning(msg))",
+            "",
+            "test_1.py: 20 warnings",
+            "  */test_1.py:7: UserWarning: bar",
+            "    warnings.warn(UserWarning(msg))",
+            "",
+            "-- Docs: *",
+            "*= 42 passed, 42 warnings *",
+        ],
+        consecutive=True,
+    )
+
+
+def test_pytest_configure_warning(testdir, recwarn):
+    """Issue 5115."""
+    testdir.makeconftest(
+        """
+        def pytest_configure():
+            import warnings
+
+            warnings.warn("from pytest_configure")
+        """
+    )
+
+    result = testdir.runpytest()
+    assert result.ret == 5
+    assert "INTERNALERROR" not in result.stderr.str()
+    warning = recwarn.pop()
+    assert str(warning.message) == "from pytest_configure"
+
+
+class TestStackLevel:
+    @pytest.fixture
+    def capwarn(self, testdir):
+        class CapturedWarnings:
+            captured = []
+
+            @classmethod
+            def pytest_warning_captured(cls, warning_message, when, item, location):
+                cls.captured.append((warning_message, location))
+
+        testdir.plugins = [CapturedWarnings()]
+
+        return CapturedWarnings
+
+    def test_issue4445_rewrite(self, testdir, capwarn):
+        """#4445: Make sure the warning points to a reasonable location
+        See origin of _issue_warning_captured at: _pytest.assertion.rewrite.py:241
+        """
+        testdir.makepyfile(some_mod="")
+        conftest = testdir.makeconftest(
+            """
+                import some_mod
+                import pytest
+
+                pytest.register_assert_rewrite("some_mod")
+            """
+        )
+        testdir.parseconfig()
+
+        # with stacklevel=5 the warning originates from register_assert_rewrite
+        # function in the created conftest.py
+        assert len(capwarn.captured) == 1
+        warning, location = capwarn.captured.pop()
+        file, lineno, func = location
+
+        assert "Module already imported" in str(warning.message)
+        assert file == str(conftest)
+        assert func == "<module>"  # the above conftest.py
+        assert lineno == 4
+
+    def test_issue4445_preparse(self, testdir, capwarn):
+        """#4445: Make sure the warning points to a reasonable location
+        See origin of _issue_warning_captured at: _pytest.config.__init__.py:910
+        """
+        testdir.makeconftest(
+            """
+            import nothing
+            """
+        )
+        testdir.parseconfig("--help")
+
+        # with stacklevel=2 the warning should originate from config._preparse and is
+        # thrown by an errorneous conftest.py
+        assert len(capwarn.captured) == 1
+        warning, location = capwarn.captured.pop()
+        file, _, func = location
+
+        assert "could not load initial conftests" in str(warning.message)
+        assert "config{sep}__init__.py".format(sep=os.sep) in file
+        assert func == "_preparse"
+
+    def test_issue4445_import_plugin(self, testdir, capwarn):
+        """#4445: Make sure the warning points to a reasonable location
+        See origin of _issue_warning_captured at: _pytest.config.__init__.py:585
+        """
+        testdir.makepyfile(
+            some_plugin="""
+            import pytest
+            pytest.skip("thing", allow_module_level=True)
+            """
+        )
+        testdir.syspathinsert()
+        testdir.parseconfig("-p", "some_plugin")
+
+        # with stacklevel=2 the warning should originate from
+        # config.PytestPluginManager.import_plugin is thrown by a skipped plugin
+
+        assert len(capwarn.captured) == 1
+        warning, location = capwarn.captured.pop()
+        file, _, func = location
+
+        assert "skipped plugin 'some_plugin': thing" in str(warning.message)
+        assert "config{sep}__init__.py".format(sep=os.sep) in file
+        assert func == "import_plugin"
+
+    def test_issue4445_resultlog(self, testdir, capwarn):
+        """#4445: Make sure the warning points to a reasonable location
+        See origin of _issue_warning_captured at: _pytest.resultlog.py:35
+        """
+        testdir.makepyfile(
+            """
+            def test_dummy():
+                pass
+        """
+        )
+        # Use parseconfigure() because the warning in resultlog.py is triggered in
+        # the pytest_configure hook
+        testdir.parseconfigure(
+            "--result-log={dir}".format(dir=testdir.tmpdir.join("result.log"))
+        )
+
+        # with stacklevel=2 the warning originates from resultlog.pytest_configure
+        # and is thrown when --result-log is used
+        warning, location = capwarn.captured.pop()
+        file, _, func = location
+
+        assert "--result-log is deprecated" in str(warning.message)
+        assert "resultlog.py" in file
+        assert func == "pytest_configure"
+
+    def test_issue4445_issue5928_mark_generator(self, testdir):
+        """#4445 and #5928: Make sure the warning from an unknown mark points to
+        the test file where this mark is used.
+        """
+        testfile = testdir.makepyfile(
+            """
+            import pytest
+
+            @pytest.mark.unknown
+            def test_it():
+                pass
+            """
+        )
+        result = testdir.runpytest_subprocess()
+        # with stacklevel=2 the warning should originate from the above created test file
+        result.stdout.fnmatch_lines_random(
+            [
+                "*{testfile}:3*".format(testfile=str(testfile)),
+                "*Unknown pytest.mark.unknown*",
+            ]
+        )

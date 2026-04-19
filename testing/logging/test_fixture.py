@@ -1,7 +1,7 @@
-# -*- coding: utf-8 -*-
 import logging
 
 import pytest
+from _pytest.logging import catch_log_records_key
 
 logger = logging.getLogger(__name__)
 sublogger = logging.getLogger(__name__ + ".baz")
@@ -47,7 +47,7 @@ def test_change_level_undo(testdir):
     )
     result = testdir.runpytest()
     result.stdout.fnmatch_lines(["*log from test1*", "*2 failed in *"])
-    assert "log from test2" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*log from test2*")
 
 
 def test_with_statement(caplog):
@@ -103,15 +103,15 @@ def test_record_tuples(caplog):
 
 def test_unicode(caplog):
     caplog.set_level(logging.INFO)
-    logger.info(u"bū")
+    logger.info("bū")
     assert caplog.records[0].levelname == "INFO"
-    assert caplog.records[0].msg == u"bū"
-    assert u"bū" in caplog.text
+    assert caplog.records[0].msg == "bū"
+    assert "bū" in caplog.text
 
 
 def test_clear(caplog):
     caplog.set_level(logging.INFO)
-    logger.info(u"bū")
+    logger.info("bū")
     assert len(caplog.records)
     assert caplog.text
     caplog.clear()
@@ -137,4 +137,4 @@ def test_caplog_captures_for_all_stages(caplog, logging_during_setup_and_teardow
     assert [x.message for x in caplog.get_records("setup")] == ["a_setup_log"]
 
     # This reaches into private API, don't use this type of thing in real tests!
-    assert set(caplog._item.catch_log_handlers.keys()) == {"setup", "call"}
+    assert set(caplog._item._store[catch_log_records_key]) == {"setup", "call"}

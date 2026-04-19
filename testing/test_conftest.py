@@ -1,16 +1,12 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
+import os
 import textwrap
 
 import py
 
 import pytest
+from _pytest.config import ExitCode
 from _pytest.config import PytestPluginManager
-from _pytest.main import EXIT_NOTESTSCOLLECTED
-from _pytest.main import EXIT_OK
-from _pytest.main import EXIT_USAGEERROR
+from _pytest.pathlib import Path
 
 
 def ConftestWithSetinitial(path):
@@ -20,7 +16,7 @@ def ConftestWithSetinitial(path):
 
 
 def conftest_setinitial(conftest, args, confcutdir=None):
-    class Namespace(object):
+    class Namespace:
         def __init__(self):
             self.file_or_dir = args
             self.confcutdir = str(confcutdir)
@@ -31,7 +27,7 @@ def conftest_setinitial(conftest, args, confcutdir=None):
 
 
 @pytest.mark.usefixtures("_sys_snapshot")
-class TestConftestValueAccessGlobal(object):
+class TestConftestValueAccessGlobal:
     @pytest.fixture(scope="module", params=["global", "inpackage"])
     def basedir(self, request, tmpdir_factory):
         tmpdir = tmpdir_factory.mktemp("basedir", numbered=True)
@@ -169,11 +165,12 @@ def test_setinitial_conftest_subdirs(testdir, name):
     subconftest = sub.ensure("conftest.py")
     conftest = PytestPluginManager()
     conftest_setinitial(conftest, [sub.dirpath()], confcutdir=testdir.tmpdir)
+    key = Path(str(subconftest)).resolve()
     if name not in ("whatever", ".dotdir"):
-        assert subconftest in conftest._conftestpath2mod
+        assert key in conftest._conftestpath2mod
         assert len(conftest._conftestpath2mod) == 1
     else:
-        assert subconftest not in conftest._conftestpath2mod
+        assert key not in conftest._conftestpath2mod
         assert len(conftest._conftestpath2mod) == 0
 
 
@@ -190,7 +187,7 @@ def test_conftest_confcutdir(testdir):
     )
     result = testdir.runpytest("-h", "--confcutdir=%s" % x, x)
     result.stdout.fnmatch_lines(["*--xyz*"])
-    assert "warning: could not load initial" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*warning: could not load initial*")
 
 
 @pytest.mark.skipif(
@@ -227,11 +224,11 @@ def test_conftest_symlink(testdir):
             "PASSED",
         ]
     )
-    assert result.ret == EXIT_OK
+    assert result.ret == ExitCode.OK
 
     # Should not cause "ValueError: Plugin already registered" (#4174).
     result = testdir.runpytest("-vs", "symlink")
-    assert result.ret == EXIT_OK
+    assert result.ret == ExitCode.OK
 
     realtests.ensure("__init__.py")
     result = testdir.runpytest("-vs", "symlinktests/test_foo.py::test1")
@@ -242,7 +239,7 @@ def test_conftest_symlink(testdir):
             "PASSED",
         ]
     )
-    assert result.ret == EXIT_OK
+    assert result.ret == ExitCode.OK
 
 
 @pytest.mark.skipif(
@@ -278,16 +275,41 @@ def test_conftest_symlink_files(testdir):
     build.chdir()
     result = testdir.runpytest("-vs", "app/test_foo.py")
     result.stdout.fnmatch_lines(["*conftest_loaded*", "PASSED"])
-    assert result.ret == EXIT_OK
+    assert result.ret == ExitCode.OK
+
+
+@pytest.mark.skipif(
+    os.path.normcase("x") != os.path.normcase("X"),
+    reason="only relevant for case insensitive file systems",
+)
+def test_conftest_badcase(testdir):
+    """Check conftest.py loading when directory casing is wrong (#5792)."""
+    testdir.tmpdir.mkdir("JenkinsRoot").mkdir("test")
+    source = {"setup.py": "", "test/__init__.py": "", "test/conftest.py": ""}
+    testdir.makepyfile(**{"JenkinsRoot/%s" % k: v for k, v in source.items()})
+
+    testdir.tmpdir.join("jenkinsroot/test").chdir()
+    result = testdir.runpytest()
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
+
+
+def test_conftest_uppercase(testdir):
+    """Check conftest.py whose qualified name contains uppercase characters (#5819)"""
+    source = {"__init__.py": "", "Foo/conftest.py": "", "Foo/__init__.py": ""}
+    testdir.makepyfile(**source)
+
+    testdir.tmpdir.chdir()
+    result = testdir.runpytest()
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
 
 def test_no_conftest(testdir):
     testdir.makeconftest("assert 0")
     result = testdir.runpytest("--noconftest")
-    assert result.ret == EXIT_NOTESTSCOLLECTED
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
     result = testdir.runpytest()
-    assert result.ret == EXIT_USAGEERROR
+    assert result.ret == ExitCode.USAGE_ERROR
 
 
 def test_conftest_existing_resultlog(testdir):
@@ -335,7 +357,7 @@ def test_conftest_import_order(testdir, monkeypatch):
     assert conftest._getconftestmodules(sub) == [ct1, ct2]
 
 
-def test_fixture_dependency(testdir, monkeypatch):
+def test_fixture_dependency(testdir):
     ct1 = testdir.makeconftest("")
     ct1 = testdir.makepyfile("__init__.py")
     ct1.write("")
@@ -400,7 +422,7 @@ def test_conftest_found_with_double_dash(testdir):
     )
 
 
-class TestConftestVisibility(object):
+class TestConftestVisibility:
     def _setup_tree(self, testdir):  # for issue616
         # example mostly taken from:
         # https://mail.python.org/pipermail/pytest-dev/2014-September/002617.html
@@ -491,10 +513,10 @@ class TestConftestVisibility(object):
             ("snc", ".", 1),
         ],
     )
-    @pytest.mark.issue(616)
     def test_parsefactories_relative_node_ids(
         self, testdir, chdir, testarg, expect_ntests_passed
     ):
+        """#616"""
         dirs = self._setup_tree(testdir)
         print("pytest run in cwd: %s" % (dirs[chdir].relto(testdir.tmpdir)))
         print("pytestarg        : %s" % (testarg))
@@ -626,5 +648,5 @@ def test_required_option_help(testdir):
         )
     )
     result = testdir.runpytest("-h", x)
-    assert "argument --xyz is required" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*argument --xyz is required*")
     assert "general:" in result.stdout.str()

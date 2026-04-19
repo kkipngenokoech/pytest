@@ -1,11 +1,7 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import gc
 
 import pytest
-from _pytest.main import EXIT_NOTESTSCOLLECTED
+from _pytest.config import ExitCode
 
 
 def test_simple_unittest(testdir):
@@ -59,7 +55,7 @@ def test_isclasscheck_issue53(testdir):
     """
     )
     result = testdir.runpytest(testpath)
-    assert result.ret == EXIT_NOTESTSCOLLECTED
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
 
 def test_setup(testdir):
@@ -143,6 +139,29 @@ def test_new_instances(testdir):
     reprec.assertoutcome(passed=2)
 
 
+def test_function_item_obj_is_instance(testdir):
+    """item.obj should be a bound method on unittest.TestCase function items (#5390)."""
+    testdir.makeconftest(
+        """
+        def pytest_runtest_makereport(item, call):
+            if call.when == 'call':
+                class_ = item.parent.obj
+                assert isinstance(item.obj.__self__, class_)
+    """
+    )
+    testdir.makepyfile(
+        """
+        import unittest
+
+        class Test(unittest.TestCase):
+            def test_foo(self):
+                pass
+    """
+    )
+    result = testdir.runpytest_inprocess()
+    result.stdout.fnmatch_lines(["* 1 passed in*"])
+
+
 def test_teardown(testdir):
     testpath = testdir.makepyfile(
         """
@@ -214,7 +233,7 @@ def test_unittest_skip_issue148(testdir):
 def test_method_and_teardown_failing_reporting(testdir):
     testdir.makepyfile(
         """
-        import unittest, pytest
+        import unittest
         class TC(unittest.TestCase):
             def tearDown(self):
                 assert 0, "down1"
@@ -251,7 +270,7 @@ def test_setup_failure_is_shown(testdir):
     result = testdir.runpytest("-s")
     assert result.ret == 1
     result.stdout.fnmatch_lines(["*setUp*", "*assert 0*down1*", "*1 failed*"])
-    assert "never42" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*never42*")
 
 
 def test_setup_setUpClass(testdir):
@@ -323,7 +342,7 @@ def test_testcase_adderrorandfailure_defers(testdir, type):
         % (type, type)
     )
     result = testdir.runpytest()
-    assert "should not raise" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*should not raise*")
 
 
 @pytest.mark.parametrize("type", ["Error", "Failure"])
@@ -364,7 +383,7 @@ def test_testcase_custom_exception_info(testdir, type):
 
 
 def test_testcase_totally_incompatible_exception_info(testdir):
-    item, = testdir.getitems(
+    (item,) = testdir.getitems(
         """
         from unittest import TestCase
         class MyTestCase(TestCase):
@@ -392,7 +411,7 @@ def test_module_level_pytestmark(testdir):
     reprec.assertoutcome(skipped=1)
 
 
-class TestTrialUnittest(object):
+class TestTrialUnittest:
     def setup_class(cls):
         cls.ut = pytest.importorskip("twisted.trial.unittest")
         # on windows trial uses a socket for a reactor and apparently doesn't close it properly
@@ -458,9 +477,6 @@ class TestTrialUnittest(object):
                     pass
         """
         )
-        from _pytest.compat import _is_unittest_unexpected_success_a_failure
-
-        should_fail = _is_unittest_unexpected_success_a_failure()
         result = testdir.runpytest("-rxs", *self.ignore_unclosed_socket_warning)
         result.stdout.fnmatch_lines_random(
             [
@@ -471,12 +487,10 @@ class TestTrialUnittest(object):
                 "*i2wanto*",
                 "*sys.version_info*",
                 "*skip_in_method*",
-                "*1 failed*4 skipped*3 xfailed*"
-                if should_fail
-                else "*4 skipped*3 xfail*1 xpass*",
+                "*1 failed*4 skipped*3 xfailed*",
             ]
         )
-        assert result.ret == (1 if should_fail else 0)
+        assert result.ret == 1
 
     def test_trial_error(self, testdir):
         testdir.makepyfile(
@@ -516,19 +530,31 @@ class TestTrialUnittest(object):
                 # will crash both at test time and at teardown
         """
         )
-        result = testdir.runpytest()
+        # Ignore DeprecationWarning (for `cmp`) from attrs through twisted,
+        # for stable test results.
+        result = testdir.runpytest(
+            "-vv", "-oconsole_output_style=classic", "-W", "ignore::DeprecationWarning"
+        )
         result.stdout.fnmatch_lines(
             [
+                "test_trial_error.py::TC::test_four FAILED",
+                "test_trial_error.py::TC::test_four ERROR",
+                "test_trial_error.py::TC::test_one FAILED",
+                "test_trial_error.py::TC::test_three FAILED",
+                "test_trial_error.py::TC::test_two FAILED",
                 "*ERRORS*",
+                "*_ ERROR at teardown of TC.test_four _*",
                 "*DelayedCalls*",
-                "*test_four*",
+                "*= FAILURES =*",
+                "*_ TC.test_four _*",
                 "*NameError*crash*",
-                "*test_one*",
+                "*_ TC.test_one _*",
                 "*NameError*crash*",
-                "*test_three*",
+                "*_ TC.test_three _*",
                 "*DelayedCalls*",
-                "*test_two*",
-                "*crash*",
+                "*_ TC.test_two _*",
+                "*NameError*crash*",
+                "*= 4 failed, 1 error in *",
             ]
         )
 
@@ -670,7 +696,7 @@ def test_unittest_not_shown_in_traceback(testdir):
     """
     )
     res = testdir.runpytest()
-    assert "failUnlessEqual" not in res.stdout.str()
+    res.stdout.no_fnmatch_line("*failUnlessEqual*")
 
 
 def test_unorderable_types(testdir):
@@ -689,8 +715,8 @@ def test_unorderable_types(testdir):
     """
     )
     result = testdir.runpytest()
-    assert "TypeError" not in result.stdout.str()
-    assert result.ret == EXIT_NOTESTSCOLLECTED
+    result.stdout.no_fnmatch_line("*TypeError*")
+    assert result.ret == ExitCode.NO_TESTS_COLLECTED
 
 
 def test_unittest_typerror_traceback(testdir):
@@ -744,22 +770,17 @@ def test_unittest_expected_failure_for_passing_test_is_fail(testdir, runner):
             unittest.main()
     """
     )
-    from _pytest.compat import _is_unittest_unexpected_success_a_failure
 
-    should_fail = _is_unittest_unexpected_success_a_failure()
     if runner == "pytest":
         result = testdir.runpytest("-rxX")
         result.stdout.fnmatch_lines(
-            [
-                "*MyTestCase*test_passing_test_is_fail*",
-                "*1 failed*" if should_fail else "*1 xpassed*",
-            ]
+            ["*MyTestCase*test_passing_test_is_fail*", "*1 failed*"]
         )
     else:
         result = testdir.runpython(script)
         result.stderr.fnmatch_lines(["*1 test in*", "*(unexpected successes=1)*"])
 
-    assert result.ret == (1 if should_fail else 0)
+    assert result.ret == 1
 
 
 @pytest.mark.parametrize(
@@ -851,6 +872,37 @@ def test_no_teardown_if_setupclass_failed(testdir):
     reprec.assertoutcome(passed=1, failed=1)
 
 
+def test_cleanup_functions(testdir):
+    """Ensure functions added with addCleanup are always called after each test ends (#6947)"""
+    testdir.makepyfile(
+        """
+        import unittest
+
+        cleanups = []
+
+        class Test(unittest.TestCase):
+
+            def test_func_1(self):
+                self.addCleanup(cleanups.append, "test_func_1")
+
+            def test_func_2(self):
+                self.addCleanup(cleanups.append, "test_func_2")
+                assert 0
+
+            def test_func_3_check_cleanups(self):
+                assert cleanups == ["test_func_1", "test_func_2"]
+    """
+    )
+    result = testdir.runpytest("-v")
+    result.stdout.fnmatch_lines(
+        [
+            "*::test_func_1 PASSED *",
+            "*::test_func_2 FAILED *",
+            "*::test_func_3_check_cleanups PASSED *",
+        ]
+    )
+
+
 def test_issue333_result_clearing(testdir):
     testdir.makeconftest(
         """
@@ -930,11 +982,9 @@ def test_class_method_containing_test_issue1558(testdir):
     reprec.assertoutcome(passed=1)
 
 
-@pytest.mark.issue(3498)
-@pytest.mark.parametrize(
-    "base", ["six.moves.builtins.object", "unittest.TestCase", "unittest2.TestCase"]
-)
+@pytest.mark.parametrize("base", ["builtins.object", "unittest.TestCase"])
 def test_usefixtures_marker_on_unittest(base, testdir):
+    """#3498"""
     module = base.rsplit(".", 1)[0]
     pytest.importorskip(module)
     testdir.makepyfile(
@@ -1013,7 +1063,7 @@ def test_testcase_handles_init_exceptions(testdir):
     )
     result = testdir.runpytest()
     assert "should raise this exception" in result.stdout.str()
-    assert "ERROR at teardown of MyTestCase.test_hello" not in result.stdout.str()
+    result.stdout.no_fnmatch_line("*ERROR at teardown of MyTestCase.test_hello*")
 
 
 def test_error_message_with_parametrized_fixtures(testdir):
@@ -1041,3 +1091,154 @@ def test_setup_inheritance_skipping(testdir, test_name, expected_outcome):
     testdir.copy_example("unittest/{}".format(test_name))
     result = testdir.runpytest()
     result.stdout.fnmatch_lines(["* {} in *".format(expected_outcome)])
+
+
+def test_BdbQuit(testdir):
+    testdir.makepyfile(
+        test_foo="""
+        import unittest
+
+        class MyTestCase(unittest.TestCase):
+            def test_bdbquit(self):
+                import bdb
+                raise bdb.BdbQuit()
+
+            def test_should_not_run(self):
+                pass
+    """
+    )
+    reprec = testdir.inline_run()
+    reprec.assertoutcome(failed=1, passed=1)
+
+
+def test_exit_outcome(testdir):
+    testdir.makepyfile(
+        test_foo="""
+        import pytest
+        import unittest
+
+        class MyTestCase(unittest.TestCase):
+            def test_exit_outcome(self):
+                pytest.exit("pytest_exit called")
+
+            def test_should_not_run(self):
+                pass
+    """
+    )
+    result = testdir.runpytest()
+    result.stdout.fnmatch_lines(["*Exit: pytest_exit called*", "*= no tests ran in *"])
+
+
+def test_trace(testdir, monkeypatch):
+    calls = []
+
+    def check_call(*args, **kwargs):
+        calls.append((args, kwargs))
+        assert args == ("runcall",)
+
+        class _pdb:
+            def runcall(*args, **kwargs):
+                calls.append((args, kwargs))
+
+        return _pdb
+
+    monkeypatch.setattr("_pytest.debugging.pytestPDB._init_pdb", check_call)
+
+    p1 = testdir.makepyfile(
+        """
+        import unittest
+
+        class MyTestCase(unittest.TestCase):
+            def test(self):
+                self.assertEqual('foo', 'foo')
+    """
+    )
+    result = testdir.runpytest("--trace", str(p1))
+    assert len(calls) == 2
+    assert result.ret == 0
+
+
+def test_pdb_teardown_called(testdir, monkeypatch):
+    """Ensure tearDown() is always called when --pdb is given in the command-line.
+
+    We delay the normal tearDown() calls when --pdb is given, so this ensures we are calling
+    tearDown() eventually to avoid memory leaks when using --pdb.
+    """
+    teardowns = []
+    monkeypatch.setattr(
+        pytest, "test_pdb_teardown_called_teardowns", teardowns, raising=False
+    )
+
+    testdir.makepyfile(
+        """
+        import unittest
+        import pytest
+
+        class MyTestCase(unittest.TestCase):
+
+            def tearDown(self):
+                pytest.test_pdb_teardown_called_teardowns.append(self.id())
+
+            def test_1(self):
+                pass
+            def test_2(self):
+                pass
+    """
+    )
+    result = testdir.runpytest_inprocess("--pdb")
+    result.stdout.fnmatch_lines("* 2 passed in *")
+    assert teardowns == [
+        "test_pdb_teardown_called.MyTestCase.test_1",
+        "test_pdb_teardown_called.MyTestCase.test_2",
+    ]
+
+
+@pytest.mark.parametrize("mark", ["@unittest.skip", "@pytest.mark.skip"])
+def test_pdb_teardown_skipped(testdir, monkeypatch, mark):
+    """
+    With --pdb, setUp and tearDown should not be called for skipped tests.
+    """
+    tracked = []
+    monkeypatch.setattr(pytest, "test_pdb_teardown_skipped", tracked, raising=False)
+
+    testdir.makepyfile(
+        """
+        import unittest
+        import pytest
+
+        class MyTestCase(unittest.TestCase):
+
+            def setUp(self):
+                pytest.test_pdb_teardown_skipped.append("setUp:" + self.id())
+
+            def tearDown(self):
+                pytest.test_pdb_teardown_skipped.append("tearDown:" + self.id())
+
+            {mark}("skipped for reasons")
+            def test_1(self):
+                pass
+
+    """.format(
+            mark=mark
+        )
+    )
+    result = testdir.runpytest_inprocess("--pdb")
+    result.stdout.fnmatch_lines("* 1 skipped in *")
+    assert tracked == []
+
+
+def test_async_support(testdir):
+    pytest.importorskip("unittest.async_case")
+
+    testdir.copy_example("unittest/test_unittest_asyncio.py")
+    reprec = testdir.inline_run()
+    reprec.assertoutcome(failed=1, passed=2)
+
+
+def test_asynctest_support(testdir):
+    """Check asynctest support (#7110)"""
+    pytest.importorskip("asynctest")
+
+    testdir.copy_example("unittest/test_unittest_asynctest.py")
+    reprec = testdir.inline_run()
+    reprec.assertoutcome(failed=1, passed=2)

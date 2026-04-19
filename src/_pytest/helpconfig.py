@@ -1,8 +1,4 @@
 """ version info, help messages, tracing configuration.  """
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import os
 import sys
 from argparse import Action
@@ -23,7 +19,7 @@ class HelpAction(Action):
     """
 
     def __init__(self, option_strings, dest=None, default=False, help=None):
-        super(HelpAction, self).__init__(
+        super().__init__(
             option_strings=option_strings,
             dest=dest,
             const=True,
@@ -44,8 +40,12 @@ def pytest_addoption(parser):
     group = parser.getgroup("debugconfig")
     group.addoption(
         "--version",
-        action="store_true",
-        help="display pytest lib version and import information.",
+        "-V",
+        action="count",
+        default=0,
+        dest="version",
+        help="display pytest version and information about plugins."
+        "When given twice, also display information about plugins.",
     )
     group._addoption(
         "-h",
@@ -60,7 +60,7 @@ def pytest_addoption(parser):
         dest="plugins",
         default=[],
         metavar="name",
-        help="early-load given plugin module name or entry point (multi-allowed). "
+        help="early-load given plugin module name or entry point (multi-allowed).\n"
         "To avoid loading of plugins, use the `no:` prefix, e.g. "
         "`no:doctest`.",
     )
@@ -70,7 +70,7 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="trace considerations of conftest.py files.",
-    ),
+    )
     group.addoption(
         "--debug",
         action="store_true",
@@ -102,7 +102,7 @@ def pytest_cmdline_parse():
                 py.__version__,
                 ".".join(map(str, sys.version_info)),
                 os.getcwd(),
-                config._origargs,
+                config.invocation_params.args,
             )
         )
         config.trace.root.setwriter(debugfile.write)
@@ -119,18 +119,22 @@ def pytest_cmdline_parse():
 
 
 def showversion(config):
-    p = py.path.local(pytest.__file__)
-    sys.stderr.write(
-        "This is pytest version %s, imported from %s\n" % (pytest.__version__, p)
-    )
-    plugininfo = getpluginversioninfo(config)
-    if plugininfo:
-        for line in plugininfo:
-            sys.stderr.write(line + "\n")
+    if config.option.version > 1:
+        sys.stderr.write(
+            "This is pytest version {}, imported from {}\n".format(
+                pytest.__version__, pytest.__file__
+            )
+        )
+        plugininfo = getpluginversioninfo(config)
+        if plugininfo:
+            for line in plugininfo:
+                sys.stderr.write(line + "\n")
+    else:
+        sys.stderr.write("pytest {}\n".format(pytest.__version__))
 
 
 def pytest_cmdline_main(config):
-    if config.option.version:
+    if config.option.version > 0:
         showversion(config)
         return 0
     elif config.option.help:
@@ -141,10 +145,11 @@ def pytest_cmdline_main(config):
 
 
 def showhelp(config):
+    import textwrap
+
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     tw = reporter._tw
     tw.write(config._parser.optparser.format_help())
-    tw.line()
     tw.line()
     tw.line(
         "[pytest] ini-options in the first pytest.ini|tox.ini|setup.cfg file found:"
@@ -152,13 +157,36 @@ def showhelp(config):
     tw.line()
 
     columns = tw.fullwidth  # costly call
+    indent_len = 24  # based on argparse's max_help_position=24
+    indent = " " * indent_len
     for name in config._parser._ininames:
         help, type, default = config._parser._inidict[name]
         if type is None:
             type = "string"
-        spec = "%s (%s)" % (name, type)
-        line = "  %-24s %s" % (spec, help)
-        tw.line(line[:columns])
+        spec = "{} ({}):".format(name, type)
+        tw.write("  %s" % spec)
+        spec_len = len(spec)
+        if spec_len > (indent_len - 3):
+            # Display help starting at a new line.
+            tw.line()
+            helplines = textwrap.wrap(
+                help,
+                columns,
+                initial_indent=indent,
+                subsequent_indent=indent,
+                break_on_hyphens=False,
+            )
+
+            for line in helplines:
+                tw.line(line)
+        else:
+            # Display help starting after the spec, following lines indented.
+            tw.write(" " * (indent_len - spec_len - 2))
+            wrapped = textwrap.wrap(help, columns - indent_len, break_on_hyphens=False)
+
+            tw.line(wrapped[0])
+            for line in wrapped[1:]:
+                tw.line(indent + line)
 
     tw.line()
     tw.line("environment variables:")
@@ -169,7 +197,7 @@ def showhelp(config):
         ("PYTEST_DEBUG", "set to enable debug tracing of pytest's internals"),
     ]
     for name, help in vars:
-        tw.line("  %-24s %s" % (name, help))
+        tw.line("  {:<24} {}".format(name, help))
     tw.line()
     tw.line()
 
@@ -196,7 +224,7 @@ def getpluginversioninfo(config):
         lines.append("setuptools registered plugins:")
         for plugin, dist in plugininfo:
             loc = getattr(plugin, "__file__", repr(plugin))
-            content = "%s-%s at %s" % (dist.project_name, dist.version, loc)
+            content = "{}-{} at {}".format(dist.project_name, dist.version, loc)
             lines.append("  " + content)
     return lines
 
@@ -204,7 +232,9 @@ def getpluginversioninfo(config):
 def pytest_report_header(config):
     lines = []
     if config.option.debug or config.option.traceconfig:
-        lines.append("using: pytest-%s pylib-%s" % (pytest.__version__, py.__version__))
+        lines.append(
+            "using: pytest-{} pylib-{}".format(pytest.__version__, py.__version__)
+        )
 
         verinfo = getpluginversioninfo(config)
         if verinfo:
@@ -218,5 +248,5 @@ def pytest_report_header(config):
                 r = plugin.__file__
             else:
                 r = repr(plugin)
-            lines.append("    %-20s: %s" % (name, r))
+            lines.append("    {:<20}: {}".format(name, r))
     return lines

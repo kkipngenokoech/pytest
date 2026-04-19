@@ -2,13 +2,6 @@
 Talks and Tutorials
 ==========================
 
-..
-   .. sidebar:: Next Open Trainings
-
-      `Professional Testing with Python
-      <http://www.python-academy.com/courses/specialtopics/python_course_testing.html>`_,
-      26-28 April 2017, Leipzig, Germany.
-
 .. _`funcargs`: funcargs.html
 
 Books
@@ -22,6 +15,8 @@ Books
 
 Talks and blog postings
 ---------------------------------------------
+
+- `pytest: recommendations, basic packages for testing in Python and Django, Andreu Vallbona, PyBCN June 2019 <https://www.slideshare.net/AndreuVallbonaPlazas/pybcn-pytest-recomendaciones-paquetes-bsicos-para-testing-en-python-y-django>`_.
 
 - pytest: recommendations, basic packages for testing in Python and Django, Andreu Vallbona, PyconES 2017 (`slides in english <http://talks.apsl.io/testing-pycones-2017/>`_, `video in spanish <https://www.youtube.com/watch?v=K20GeR-lXDk>`_)
 
@@ -47,7 +42,7 @@ Talks and blog postings
   <https://www.youtube.com/watch?v=P-AhpukDIik>`_
 
 - `3-part blog series about pytest from @pydanny alias Daniel Greenfeld (January
-  2014) <http://pydanny.com/pytest-no-boilerplate-testing.html>`_
+  2014) <https://daniel.roygreenfeld.com/pytest-no-boilerplate-testing.html>`_
 
 - `pytest: helps you write better Django apps, Andreas Pelme, DjangoCon
   Europe 2014 <https://www.youtube.com/watch?v=aaArYVh6XSM>`_.
@@ -69,7 +64,7 @@ Talks and blog postings
 - `pytest introduction from Brian Okken (January 2013)
   <http://pythontesting.net/framework/pytest-introduction/>`_
 
-- pycon australia 2012 pytest talk from Brianna Laugher (`video <http://www.youtube.com/watch?v=DTNejE9EraI>`_, `slides <http://www.slideshare.net/pfctdayelise/funcargs-other-fun-with-pytest>`_, `code <https://gist.github.com/3386951>`_)
+- pycon australia 2012 pytest talk from Brianna Laugher (`video <http://www.youtube.com/watch?v=DTNejE9EraI>`_, `slides <https://www.slideshare.net/pfctdayelise/funcargs-other-fun-with-pytest>`_, `code <https://gist.github.com/3386951>`_)
 - `pycon 2012 US talk video from Holger Krekel <http://www.youtube.com/watch?v=9LVqBQcFmyw>`_
 
 - `monkey patching done right`_ (blog post, consult `monkeypatch plugin`_ for up-to-date API)
