@@ -4,7 +4,9 @@
 Working with custom markers
 =================================================
 
-Here are some example using the :ref:`mark` mechanism.
+Here are some examples using the :ref:`mark` mechanism.
+
+.. _`mark run`:
 
 Marking test functions and selecting them for a run
 ----------------------------------------------------
@@ -259,7 +261,7 @@ For an example on how to add and work with markers from a plugin, see
     * Asking for existing markers via ``pytest --markers`` gives good output
 
     * Typos in function markers are treated as an error if you use
-      the ``--strict`` option.
+      the ``--strict-markers`` option.
 
 .. _`scoped-marking`:
 
@@ -619,9 +621,9 @@ then you will see two tests skipped and two executed tests as expected:
     collected 4 items
 
     test_plat.py s.s.                                                    [100%]
+
     ========================= short test summary info ==========================
     SKIPPED [2] $REGENDOC_TMPDIR/conftest.py:13: cannot run on platform linux
-
     =================== 2 passed, 2 skipped in 0.12 seconds ====================
 
 Note that if you specify a platform via the marker-command line option like this:
