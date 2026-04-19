@@ -6,6 +6,8 @@ import os
 import platform
 import sys
 
+import six
+
 import _pytest._code
 import pytest
 from _pytest.debugging import _validate_usepdb_cls
@@ -395,7 +397,7 @@ class TestPDB(object):
         child = testdir.spawn_pytest(str(p1))
         child.expect("test_1")
         child.expect("Pdb")
-        child.sendeof()
+        child.sendline("q")
         rest = child.read().decode("utf8")
         assert "no tests ran" in rest
         assert "reading from stdin while output" not in rest
@@ -957,7 +959,7 @@ class TestDebuggingBreakpoints(object):
         child = testdir.spawn_pytest(str(p1))
         child.expect("test_1")
         child.expect("Pdb")
-        child.sendeof()
+        child.sendline("quit")
         rest = child.read().decode("utf8")
         assert "Quitting debugger" in rest
         assert "reading from stdin while output" not in rest
@@ -1025,24 +1027,28 @@ def test_trace_after_runpytest(testdir):
         from _pytest.debugging import pytestPDB
 
         def test_outer(testdir):
-            from _pytest.debugging import pytestPDB
-
             assert len(pytestPDB._saved) == 1
 
-            testdir.runpytest("-k test_inner")
+            testdir.makepyfile(
+                \"""
+                from _pytest.debugging import pytestPDB
 
-            __import__('pdb').set_trace()
+                def test_inner():
+                    assert len(pytestPDB._saved) == 2
+                    print()
+                    print("test_inner_" + "end")
+                \"""
+            )
 
-        def test_inner(testdir):
-            assert len(pytestPDB._saved) == 2
+            result = testdir.runpytest("-s", "-k", "test_inner")
+            assert result.ret == 0
+
+            assert len(pytestPDB._saved) == 1
     """
     )
-    child = testdir.spawn_pytest("-p pytester %s -k test_outer" % p1)
-    child.expect(r"\(Pdb")
-    child.sendline("c")
-    rest = child.read().decode("utf8")
-    TestPDB.flush(child)
-    assert child.exitstatus == 0, rest
+    result = testdir.runpytest_subprocess("-s", "-p", "pytester", str(p1))
+    result.stdout.fnmatch_lines(["test_inner_end"])
+    assert result.ret == 0
 
 
 def test_quit_with_swallowed_SystemExit(testdir):
@@ -1163,3 +1169,29 @@ def test_pdbcls_via_local_module(testdir):
     )
     assert result.ret == 0
     result.stdout.fnmatch_lines(["*runcall_called*", "* 1 passed in *"])
+
+
+def test_raises_bdbquit_with_eoferror(testdir):
+    """It is not guaranteed that DontReadFromInput's read is called."""
+    if six.PY2:
+        builtin_module = "__builtin__"
+        input_func = "raw_input"
+    else:
+        builtin_module = "builtins"
+        input_func = "input"
+    p1 = testdir.makepyfile(
+        """
+        def input_without_read(*args, **kwargs):
+            raise EOFError()
+
+        def test(monkeypatch):
+            import {builtin_module}
+            monkeypatch.setattr({builtin_module}, {input_func!r}, input_without_read)
+            __import__('pdb').set_trace()
+        """.format(
+            builtin_module=builtin_module, input_func=input_func
+        )
+    )
+    result = testdir.runpytest(str(p1))
+    result.stdout.fnmatch_lines(["E *BdbQuit", "*= 1 failed in*"])
+    assert result.ret == 1
