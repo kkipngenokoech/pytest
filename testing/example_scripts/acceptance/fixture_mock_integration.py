@@ -1,11 +1,12 @@
+# mypy: allow-untyped-defs
 """Reproduces issue #3774"""
 
-try:
-    import mock
-except ImportError:
-    import unittest.mock as mock
+from __future__ import annotations
+
+from unittest import mock
 
 import pytest
+
 
 config = {"mykey": "ORIGINAL"}
 

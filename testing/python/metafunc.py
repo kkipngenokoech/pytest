@@ -1,42 +1,64 @@
-# -*- coding: utf-8 -*-
+# mypy: allow-untyped-defs
+from __future__ import annotations
+
+from collections.abc import Iterator
+from collections.abc import Sequence
+import dataclasses
+import itertools
 import re
 import sys
 import textwrap
+from typing import Any
+from typing import cast
 
-import attr
 import hypothesis
-import six
 from hypothesis import strategies
 
-import pytest
 from _pytest import fixtures
 from _pytest import python
-from _pytest.warnings import SHOW_PYTEST_WARNINGS_ARG
+from _pytest.compat import getfuncargnames
+from _pytest.compat import NOTSET
+from _pytest.outcomes import fail
+from _pytest.outcomes import Failed
+from _pytest.pytester import Pytester
+from _pytest.python import Function
+from _pytest.python import IdMaker
+from _pytest.scope import Scope
+import pytest
 
-PY3 = sys.version_info >= (3, 0)
 
-
-class TestMetafunc(object):
-    def Metafunc(self, func, config=None):
-        # the unit tests of this class check if things work correctly
+class TestMetafunc:
+    def Metafunc(self, func, config=None) -> python.Metafunc:
+        # The unit tests of this class check if things work correctly
         # on the funcarg level, so we don't need a full blown
-        # initiliazation
-        class FixtureInfo(object):
-            name2fixturedefs = None
+        # initialization.
+        class FuncFixtureInfoMock:
+            name2fixturedefs: dict[str, list[fixtures.FixtureDef[object]]] = {}
 
             def __init__(self, names):
                 self.names_closure = names
 
-        @attr.s
-        class DefinitionMock(object):
-            obj = attr.ib()
+        @dataclasses.dataclass
+        class FixtureManagerMock:
+            config: Any
 
-        names = fixtures.getfuncargnames(func)
-        fixtureinfo = FixtureInfo(names)
-        definition = DefinitionMock(func)
-        return python.Metafunc(definition, fixtureinfo, config)
+        @dataclasses.dataclass
+        class SessionMock:
+            _fixturemanager: FixtureManagerMock
 
-    def test_no_funcargs(self, testdir):
+        @dataclasses.dataclass
+        class DefinitionMock(python.FunctionDefinition):
+            _nodeid: str
+            obj: object
+
+        names = getfuncargnames(func)
+        fixtureinfo: Any = FuncFixtureInfoMock(names)
+        definition: Any = DefinitionMock._create(obj=func, _nodeid="mock::nodeid")
+        definition._fixtureinfo = fixtureinfo
+        definition.session = SessionMock(FixtureManagerMock({}))
+        return python.Metafunc(definition, fixtureinfo, config, _ispytest=True)
+
+    def test_no_funcargs(self) -> None:
         def function():
             pass
 
@@ -44,7 +66,7 @@ class TestMetafunc(object):
         assert not metafunc.fixturenames
         repr(metafunc._calls)
 
-    def test_function_basic(self):
+    def test_function_basic(self) -> None:
         def func(arg1, arg2="qwe"):
             pass
 
@@ -54,43 +76,137 @@ class TestMetafunc(object):
         assert metafunc.function is func
         assert metafunc.cls is None
 
-    def test_parametrize_error(self):
+    def test_parametrize_single_arg_trailing_comma(self) -> None:
+        """Test that trailing comma in string argnames behaves like tuple argnames.
+
+        Regression test for https://github.com/pytest-dev/pytest/issues/719
+
+        When using a single argument with:
+        - "arg" (string, no comma): argvalues is a list of values
+        - "arg," (string, trailing comma): argvalues is a list of tuples (like tuple form)
+        - ("arg",) (tuple): argvalues is a list of tuples
+        """
+
+        def func(arg):
+            pass  # pragma: no cover
+
+        scenarios = [("a",), ("b",)]
+
+        # Tuple form: argvalues are tuples, unpacked to get the value
+        metafunc = self.Metafunc(func)
+        metafunc.parametrize(("arg",), scenarios)
+        assert metafunc._calls[0].params == {"arg": "a"}
+        assert metafunc._calls[1].params == {"arg": "b"}
+
+        # String with trailing comma: should behave like tuple form
+        metafunc = self.Metafunc(func)
+        metafunc.parametrize("arg,", scenarios)
+        assert metafunc._calls[0].params == {"arg": "a"}
+        assert metafunc._calls[1].params == {"arg": "b"}
+
+        # String without comma: argvalues are values directly (tuples are passed as-is)
+        metafunc = self.Metafunc(func)
+        metafunc.parametrize("arg", scenarios)
+        assert metafunc._calls[0].params == {"arg": ("a",)}
+        assert metafunc._calls[1].params == {"arg": ("b",)}
+
+        # String without comma with plain values: values are used directly
+        metafunc = self.Metafunc(func)
+        metafunc.parametrize("arg", ["a", "b"])
+        assert metafunc._calls[0].params == {"arg": "a"}
+        assert metafunc._calls[1].params == {"arg": "b"}
+
+    def test_parametrize_error(self) -> None:
         def func(x, y):
             pass
 
         metafunc = self.Metafunc(func)
         metafunc.parametrize("x", [1, 2])
-        pytest.raises(ValueError, lambda: metafunc.parametrize("x", [5, 6]))
-        pytest.raises(ValueError, lambda: metafunc.parametrize("x", [5, 6]))
+        with pytest.raises(pytest.Collector.CollectError):
+            metafunc.parametrize("x", [5, 6])
+        with pytest.raises(pytest.Collector.CollectError):
+            metafunc.parametrize("x", [5, 6])
         metafunc.parametrize("y", [1, 2])
-        pytest.raises(ValueError, lambda: metafunc.parametrize("y", [5, 6]))
-        pytest.raises(ValueError, lambda: metafunc.parametrize("y", [5, 6]))
+        with pytest.raises(pytest.Collector.CollectError):
+            metafunc.parametrize("y", [5, 6])
+        with pytest.raises(pytest.Collector.CollectError):
+            metafunc.parametrize("y", [5, 6])
 
-    def test_parametrize_bad_scope(self, testdir):
+        with pytest.raises(TypeError, match=r"^ids must be a callable or an iterable$"):
+            metafunc.parametrize("y", [5, 6], ids=42)  # type: ignore[arg-type]
+
+    def test_parametrize_error_iterator(self) -> None:
+        def func(x):
+            raise NotImplementedError()
+
+        class Exc(Exception):
+            def __repr__(self):
+                return "Exc(from_gen)"
+
+        def gen() -> Iterator[int | None | Exc]:
+            yield 0
+            yield None
+            yield Exc()
+
+        metafunc = self.Metafunc(func)
+        # When the input is an iterator, only len(args) are taken,
+        # so the bad Exc isn't reached.
+        metafunc.parametrize("x", [1, 2], ids=gen())
+        assert [(x.params, x.id) for x in metafunc._calls] == [
+            ({"x": 1}, "0"),
+            ({"x": 2}, "2"),
+        ]
+        with pytest.raises(
+            fail.Exception,
+            match=(
+                r"In mock::nodeid: ids contains unsupported value Exc\(from_gen\) \(type: <class .*Exc'>\) at index 2. "
+                r"Supported types are: .*"
+            ),
+        ):
+            metafunc.parametrize("x", [1, 2, 3], ids=gen())
+
+    def test_parametrize_bad_scope(self) -> None:
         def func(x):
             pass
 
         metafunc = self.Metafunc(func)
         with pytest.raises(
-            pytest.fail.Exception,
+            fail.Exception,
             match=r"parametrize\(\) call in func got an unexpected scope value 'doggy'",
         ):
-            metafunc.parametrize("x", [1], scope="doggy")
+            metafunc.parametrize("x", [1], scope="doggy")  # type: ignore[arg-type]
 
-    def test_find_parametrized_scope(self):
-        """unittest for _find_parametrized_scope (#3941)"""
+    def test_parametrize_request_name(self, pytester: Pytester) -> None:
+        """Show proper error  when 'request' is used as a parameter name in parametrize (#6183)"""
+
+        def func(request):
+            raise NotImplementedError()
+
+        metafunc = self.Metafunc(func)
+        with pytest.raises(
+            fail.Exception,
+            match=r"'request' is a reserved name and cannot be used in @pytest.mark.parametrize",
+        ):
+            metafunc.parametrize("request", [1])
+
+    def test_find_parametrized_scope(self) -> None:
+        """Unit test for _find_parametrized_scope (#3941)."""
         from _pytest.python import _find_parametrized_scope
 
-        @attr.s
-        class DummyFixtureDef(object):
-            scope = attr.ib()
+        @dataclasses.dataclass
+        class DummyFixtureDef:
+            _scope: Scope
 
-        fixtures_defs = dict(
-            session_fix=[DummyFixtureDef("session")],
-            package_fix=[DummyFixtureDef("package")],
-            module_fix=[DummyFixtureDef("module")],
-            class_fix=[DummyFixtureDef("class")],
-            func_fix=[DummyFixtureDef("function")],
+        fixtures_defs = cast(
+            dict[str, Sequence[fixtures.FixtureDef[object]]],
+            dict(
+                session_fix=[DummyFixtureDef(Scope.Session)],
+                package_fix=[DummyFixtureDef(Scope.Package)],
+                module_fix=[DummyFixtureDef(Scope.Module)],
+                class_fix=[DummyFixtureDef(Scope.Class)],
+                func_fix=[DummyFixtureDef(Scope.Function)],
+                mixed_fix=[DummyFixtureDef(Scope.Module), DummyFixtureDef(Scope.Class)],
+            ),
         )
 
         # use arguments to determine narrow scope; the cause of the bug is that it would look on all
@@ -98,32 +214,37 @@ class TestMetafunc(object):
         def find_scope(argnames, indirect):
             return _find_parametrized_scope(argnames, fixtures_defs, indirect=indirect)
 
-        assert find_scope(["func_fix"], indirect=True) == "function"
-        assert find_scope(["class_fix"], indirect=True) == "class"
-        assert find_scope(["module_fix"], indirect=True) == "module"
-        assert find_scope(["package_fix"], indirect=True) == "package"
-        assert find_scope(["session_fix"], indirect=True) == "session"
+        assert find_scope(["func_fix"], indirect=True) == Scope.Function
+        assert find_scope(["class_fix"], indirect=True) == Scope.Class
+        assert find_scope(["module_fix"], indirect=True) == Scope.Module
+        assert find_scope(["package_fix"], indirect=True) == Scope.Package
+        assert find_scope(["session_fix"], indirect=True) == Scope.Session
 
-        assert find_scope(["class_fix", "func_fix"], indirect=True) == "function"
-        assert find_scope(["func_fix", "session_fix"], indirect=True) == "function"
-        assert find_scope(["session_fix", "class_fix"], indirect=True) == "class"
-        assert find_scope(["package_fix", "session_fix"], indirect=True) == "package"
-        assert find_scope(["module_fix", "session_fix"], indirect=True) == "module"
+        assert find_scope(["class_fix", "func_fix"], indirect=True) == Scope.Function
+        assert find_scope(["func_fix", "session_fix"], indirect=True) == Scope.Function
+        assert find_scope(["session_fix", "class_fix"], indirect=True) == Scope.Class
+        assert (
+            find_scope(["package_fix", "session_fix"], indirect=True) == Scope.Package
+        )
+        assert find_scope(["module_fix", "session_fix"], indirect=True) == Scope.Module
 
         # when indirect is False or is not for all scopes, always use function
-        assert find_scope(["session_fix", "module_fix"], indirect=False) == "function"
+        assert (
+            find_scope(["session_fix", "module_fix"], indirect=False) == Scope.Function
+        )
         assert (
             find_scope(["session_fix", "module_fix"], indirect=["module_fix"])
-            == "function"
+            == Scope.Function
         )
         assert (
             find_scope(
                 ["session_fix", "module_fix"], indirect=["session_fix", "module_fix"]
             )
-            == "module"
+            == Scope.Module
         )
+        assert find_scope(["mixed_fix"], indirect=True) == Scope.Class
 
-    def test_parametrize_and_id(self):
+    def test_parametrize_and_id(self) -> None:
         def func(x, y):
             pass
 
@@ -134,37 +255,56 @@ class TestMetafunc(object):
         ids = [x.id for x in metafunc._calls]
         assert ids == ["basic-abc", "basic-def", "advanced-abc", "advanced-def"]
 
-    def test_parametrize_and_id_unicode(self):
+    def test_parametrize_and_id_unicode(self) -> None:
         """Allow unicode strings for "ids" parameter in Python 2 (##1905)"""
 
         def func(x):
             pass
 
         metafunc = self.Metafunc(func)
-        metafunc.parametrize("x", [1, 2], ids=[u"basic", u"advanced"])
+        metafunc.parametrize("x", [1, 2], ids=["basic", "advanced"])
         ids = [x.id for x in metafunc._calls]
-        assert ids == [u"basic", u"advanced"]
+        assert ids == ["basic", "advanced"]
 
-    def test_parametrize_with_wrong_number_of_ids(self, testdir):
+    def test_parametrize_with_wrong_number_of_ids(self) -> None:
         def func(x, y):
             pass
 
         metafunc = self.Metafunc(func)
 
-        with pytest.raises(pytest.fail.Exception):
+        with pytest.raises(fail.Exception):
             metafunc.parametrize("x", [1, 2], ids=["basic"])
 
-        with pytest.raises(pytest.fail.Exception):
+        with pytest.raises(fail.Exception):
             metafunc.parametrize(
                 ("x", "y"), [("abc", "def"), ("ghi", "jkl")], ids=["one"]
             )
 
-    @pytest.mark.issue(510)
-    def test_parametrize_empty_list(self):
+    def test_parametrize_ids_iterator_without_mark(self) -> None:
+        def func(x, y):
+            pass
+
+        it = itertools.count()
+
+        metafunc = self.Metafunc(func)
+        metafunc.parametrize("x", [1, 2], ids=it)
+        metafunc.parametrize("y", [3, 4], ids=it)
+        ids = [x.id for x in metafunc._calls]
+        assert ids == ["0-2", "0-3", "1-2", "1-3"]
+
+        metafunc = self.Metafunc(func)
+        metafunc.parametrize("x", [1, 2], ids=it)
+        metafunc.parametrize("y", [3, 4], ids=it)
+        ids = [x.id for x in metafunc._calls]
+        assert ids == ["4-6", "4-7", "5-6", "5-7"]
+
+    def test_parametrize_empty_list(self) -> None:
+        """#510"""
+
         def func(y):
             pass
 
-        class MockConfig(object):
+        class MockConfig:
             def getini(self, name):
                 return ""
 
@@ -179,13 +319,13 @@ class TestMetafunc(object):
         metafunc.parametrize("y", [])
         assert "skip" == metafunc._calls[0].marks[0].name
 
-    def test_parametrize_with_userobjects(self):
+    def test_parametrize_with_userobjects(self) -> None:
         def func(x, y):
             pass
 
         metafunc = self.Metafunc(func)
 
-        class A(object):
+        class A:
             pass
 
         metafunc.parametrize("x", [A(), A()])
@@ -199,60 +339,81 @@ class TestMetafunc(object):
     @hypothesis.settings(
         deadline=400.0
     )  # very close to std deadline and CI boxes are not reliable in CPU power
-    def test_idval_hypothesis(self, value):
-        from _pytest.python import _idval
-
-        escaped = _idval(value, "a", 6, None, item=None, config=None)
-        assert isinstance(escaped, six.text_type)
+    def test_idval_hypothesis(self, value) -> None:
+        escaped = IdMaker([], [], None, None, None, None)._idval(value, "a", 6)
+        assert isinstance(escaped, str)
         escaped.encode("ascii")
 
-    def test_unicode_idval(self):
-        """This tests that Unicode strings outside the ASCII character set get
+    def test_unicode_idval(self) -> None:
+        """Test that Unicode strings outside the ASCII character set get
         escaped, using byte escapes if they're in that range or unicode
         escapes if they're not.
 
         """
-        from _pytest.python import _idval
-
         values = [
-            (u"", ""),
-            (u"ascii", "ascii"),
-            (u"ação", "a\\xe7\\xe3o"),
-            (u"josé@blah.com", "jos\\xe9@blah.com"),
+            ("", r""),
+            ("ascii", r"ascii"),
+            ("ação", r"a\xe7\xe3o"),
+            ("josé@blah.com", r"jos\xe9@blah.com"),
             (
-                u"δοκ.ιμή@παράδειγμα.δοκιμή",
-                "\\u03b4\\u03bf\\u03ba.\\u03b9\\u03bc\\u03ae@\\u03c0\\u03b1\\u03c1\\u03ac\\u03b4\\u03b5\\u03b9\\u03b3"
-                "\\u03bc\\u03b1.\\u03b4\\u03bf\\u03ba\\u03b9\\u03bc\\u03ae",
+                r"δοκ.ιμή@παράδειγμα.δοκιμή",
+                r"\u03b4\u03bf\u03ba.\u03b9\u03bc\u03ae@\u03c0\u03b1\u03c1\u03ac\u03b4\u03b5\u03b9\u03b3"
+                r"\u03bc\u03b1.\u03b4\u03bf\u03ba\u03b9\u03bc\u03ae",
             ),
         ]
         for val, expected in values:
-            assert _idval(val, "a", 6, None, item=None, config=None) == expected
+            assert (
+                IdMaker([], [], None, None, None, None)._idval(val, "a", 6) == expected
+            )
 
-    def test_bytes_idval(self):
-        """unittest for the expected behavior to obtain ids for parametrized
-        bytes values:
-        - python2: non-ascii strings are considered bytes and formatted using
-        "binary escape", where any byte < 127 is escaped into its hex form.
-        - python3: bytes objects are always escaped using "binary escape".
-        """
-        from _pytest.python import _idval
+    def test_unicode_idval_with_config(self) -> None:
+        """Unit test for expected behavior to obtain ids with
+        disable_test_id_escaping_and_forfeit_all_rights_to_community_support
+        option (#5294)."""
 
+        class MockConfig:
+            def __init__(self, config):
+                self.config = config
+
+            @property
+            def hook(self):
+                return self
+
+            def pytest_make_parametrize_id(self, **kw):
+                pass
+
+            def getini(self, name):
+                return self.config[name]
+
+        option = "disable_test_id_escaping_and_forfeit_all_rights_to_community_support"
+
+        values: list[tuple[str, Any, str]] = [
+            ("ação", MockConfig({option: True}), "ação"),
+            ("ação", MockConfig({option: False}), "a\\xe7\\xe3o"),
+        ]
+        for val, config, expected in values:
+            actual = IdMaker([], [], None, None, config, None)._idval(val, "a", 6)
+            assert actual == expected
+
+    def test_bytes_idval(self) -> None:
+        """Unit test for the expected behavior to obtain ids for parametrized
+        bytes values: bytes objects are always escaped using "binary escape"."""
         values = [
-            (b"", ""),
-            (b"\xc3\xb4\xff\xe4", "\\xc3\\xb4\\xff\\xe4"),
-            (b"ascii", "ascii"),
-            (u"αρά".encode("utf-8"), "\\xce\\xb1\\xcf\\x81\\xce\\xac"),
+            (b"", r""),
+            (b"\xc3\xb4\xff\xe4", r"\xc3\xb4\xff\xe4"),
+            (b"ascii", r"ascii"),
+            ("αρά".encode(), r"\xce\xb1\xcf\x81\xce\xac"),
         ]
         for val, expected in values:
-            assert _idval(val, "a", 6, idfn=None, item=None, config=None) == expected
+            assert (
+                IdMaker([], [], None, None, None, None)._idval(val, "a", 6) == expected
+            )
 
-    def test_class_or_function_idval(self):
-        """unittest for the expected behavior to obtain ids for parametrized
-        values that are classes or functions: their __name__.
-        """
-        from _pytest.python import _idval
+    def test_class_or_function_idval(self) -> None:
+        """Unit test for the expected behavior to obtain ids for parametrized
+        values that are classes or functions: their __name__."""
 
-        class TestClass(object):
+        class TestClass:
             pass
 
         def test_function():
@@ -260,35 +421,53 @@ class TestMetafunc(object):
 
         values = [(TestClass, "TestClass"), (test_function, "test_function")]
         for val, expected in values:
-            assert _idval(val, "a", 6, None, item=None, config=None) == expected
+            assert (
+                IdMaker([], [], None, None, None, None)._idval(val, "a", 6) == expected
+            )
 
-    @pytest.mark.issue(250)
-    def test_idmaker_autoname(self):
-        from _pytest.python import idmaker
+    def test_notset_idval(self) -> None:
+        """Test that a NOTSET value (used by an empty parameterset) generates
+        a proper ID.
 
-        result = idmaker(
-            ("a", "b"), [pytest.param("string", 1.0), pytest.param("st-ring", 2.0)]
-        )
+        Regression test for #7686.
+        """
+        assert IdMaker([], [], None, None, None, None)._idval(NOTSET, "a", 0) == "a0"
+
+    def test_idmaker_autoname(self) -> None:
+        """#250"""
+        result = IdMaker(
+            ("a", "b"),
+            [pytest.param("string", 1.0), pytest.param("st-ring", 2.0)],
+            None,
+            None,
+            None,
+            None,
+        ).make_unique_parameterset_ids()
         assert result == ["string-1.0", "st-ring-2.0"]
 
-        result = idmaker(
-            ("a", "b"), [pytest.param(object(), 1.0), pytest.param(object(), object())]
-        )
+        result = IdMaker(
+            ("a", "b"),
+            [pytest.param(object(), 1.0), pytest.param(object(), object())],
+            None,
+            None,
+            None,
+            None,
+        ).make_unique_parameterset_ids()
         assert result == ["a0-1.0", "a1-b1"]
         # unicode mixing, issue250
-        result = idmaker((u"a", "b"), [pytest.param({}, b"\xc3\xb4")])
+        result = IdMaker(
+            ("a", "b"), [pytest.param({}, b"\xc3\xb4")], None, None, None, None
+        ).make_unique_parameterset_ids()
         assert result == ["a0-\\xc3\\xb4"]
 
-    def test_idmaker_with_bytes_regex(self):
-        from _pytest.python import idmaker
-
-        result = idmaker(("a"), [pytest.param(re.compile(b"foo"), 1.0)])
+    def test_idmaker_with_bytes_regex(self) -> None:
+        result = IdMaker(
+            ("a"), [pytest.param(re.compile(b"foo"))], None, None, None, None
+        ).make_unique_parameterset_ids()
         assert result == ["foo"]
 
-    def test_idmaker_native_strings(self):
-        from _pytest.python import idmaker
-
-        result = idmaker(
+    def test_idmaker_native_strings(self) -> None:
+        result = IdMaker(
             ("a", "b"),
             [
                 pytest.param(1.0, -1.1),
@@ -302,9 +481,14 @@ class TestMetafunc(object):
                 pytest.param({7}, set("seven")),
                 pytest.param(tuple("eight"), (8, -8, 8)),
                 pytest.param(b"\xc3\xb4", b"name"),
-                pytest.param(b"\xc3\xb4", u"other"),
+                pytest.param(b"\xc3\xb4", "other"),
+                pytest.param(1.0j, -2.0j),
             ],
-        )
+            None,
+            None,
+            None,
+            None,
+        ).make_unique_parameterset_ids()
         assert result == [
             "1.0--1.1",
             "2--202",
@@ -318,12 +502,11 @@ class TestMetafunc(object):
             "a9-b9",
             "\\xc3\\xb4-name",
             "\\xc3\\xb4-other",
+            "1j-(-0-2j)",
         ]
 
-    def test_idmaker_non_printable_characters(self):
-        from _pytest.python import idmaker
-
-        result = idmaker(
+    def test_idmaker_non_printable_characters(self) -> None:
+        result = IdMaker(
             ("s", "n"),
             [
                 pytest.param("\x00", 1),
@@ -333,72 +516,189 @@ class TestMetafunc(object):
                 pytest.param("\t", 5),
                 pytest.param(b"\t", 6),
             ],
-        )
+            None,
+            None,
+            None,
+            None,
+        ).make_unique_parameterset_ids()
         assert result == ["\\x00-1", "\\x05-2", "\\x00-3", "\\x05-4", "\\t-5", "\\t-6"]
 
-    def test_idmaker_manual_ids_must_be_printable(self):
-        from _pytest.python import idmaker
-
-        result = idmaker(
+    def test_idmaker_manual_ids_must_be_printable(self) -> None:
+        result = IdMaker(
             ("s",),
             [
                 pytest.param("x00", id="hello \x00"),
                 pytest.param("x05", id="hello \x05"),
             ],
-        )
+            None,
+            None,
+            None,
+            None,
+        ).make_unique_parameterset_ids()
         assert result == ["hello \\x00", "hello \\x05"]
 
-    def test_idmaker_enum(self):
-        from _pytest.python import idmaker
-
+    def test_idmaker_enum(self) -> None:
         enum = pytest.importorskip("enum")
         e = enum.Enum("Foo", "one, two")
-        result = idmaker(("a", "b"), [pytest.param(e.one, e.two)])
+        result = IdMaker(
+            ("a", "b"), [pytest.param(e.one, e.two)], None, None, None, None
+        ).make_unique_parameterset_ids()
         assert result == ["Foo.one-Foo.two"]
 
-    @pytest.mark.issue(351)
-    def test_idmaker_idfn(self):
-        from _pytest.python import idmaker
+    def test_idmaker_idfn(self) -> None:
+        """#351"""
 
-        def ids(val):
+        def ids(val: object) -> str | None:
             if isinstance(val, Exception):
                 return repr(val)
+            return None
 
-        result = idmaker(
+        result = IdMaker(
             ("a", "b"),
             [
                 pytest.param(10.0, IndexError()),
                 pytest.param(20, KeyError()),
                 pytest.param("three", [1, 2, 3]),
             ],
-            idfn=ids,
-        )
+            ids,
+            None,
+            None,
+            None,
+        ).make_unique_parameterset_ids()
         assert result == ["10.0-IndexError()", "20-KeyError()", "three-b2"]
 
-    @pytest.mark.issue(351)
-    def test_idmaker_idfn_unique_names(self):
-        from _pytest.python import idmaker
+    def test_idmaker_idfn_unique_names(self) -> None:
+        """#351"""
 
-        def ids(val):
+        def ids(val: object) -> str:
             return "a"
 
-        result = idmaker(
+        result = IdMaker(
             ("a", "b"),
             [
                 pytest.param(10.0, IndexError()),
                 pytest.param(20, KeyError()),
                 pytest.param("three", [1, 2, 3]),
             ],
-            idfn=ids,
-        )
+            ids,
+            None,
+            None,
+            None,
+        ).make_unique_parameterset_ids()
         assert result == ["a-a0", "a-a1", "a-a2"]
 
-    def test_parametrize_ids_exception(self, testdir):
+    def test_idmaker_with_idfn_and_config(self) -> None:
+        """Unit test for expected behavior to create ids with idfn and
+        disable_test_id_escaping_and_forfeit_all_rights_to_community_support
+        option (#5294).
         """
-        :param testdir: the instance of Testdir class, a temporary
+
+        class MockConfig:
+            def __init__(self, config):
+                self.config = config
+
+            @property
+            def hook(self):
+                return self
+
+            def pytest_make_parametrize_id(self, **kw):
+                pass
+
+            def getini(self, name):
+                return self.config[name]
+
+        option = "disable_test_id_escaping_and_forfeit_all_rights_to_community_support"
+
+        values: list[tuple[Any, str]] = [
+            (MockConfig({option: True}), "ação"),
+            (MockConfig({option: False}), "a\\xe7\\xe3o"),
+        ]
+        for config, expected in values:
+            result = IdMaker(
+                ("a",),
+                [pytest.param("string")],
+                lambda _: "ação",
+                None,
+                config,
+                None,
+            ).make_unique_parameterset_ids()
+            assert result == [expected]
+
+    def test_idmaker_with_ids_and_config(self) -> None:
+        """Unit test for expected behavior to create ids with ids and
+        disable_test_id_escaping_and_forfeit_all_rights_to_community_support
+        option (#5294).
+        """
+
+        class MockConfig:
+            def __init__(self, config):
+                self.config = config
+
+            @property
+            def hook(self):
+                return self
+
+            def pytest_make_parametrize_id(self, **kw):
+                pass
+
+            def getini(self, name):
+                return self.config[name]
+
+        option = "disable_test_id_escaping_and_forfeit_all_rights_to_community_support"
+
+        values: list[tuple[Any, str]] = [
+            (MockConfig({option: True}), "ação"),
+            (MockConfig({option: False}), "a\\xe7\\xe3o"),
+        ]
+        for config, expected in values:
+            result = IdMaker(
+                ("a",), [pytest.param("string")], None, ["ação"], config, None
+            ).make_unique_parameterset_ids()
+            assert result == [expected]
+
+    def test_idmaker_with_param_id_and_config(self) -> None:
+        """Unit test for expected behavior to create ids with pytest.param(id=...) and
+        disable_test_id_escaping_and_forfeit_all_rights_to_community_support
+        option (#9037).
+        """
+
+        class MockConfig:
+            def __init__(self, config):
+                self.config = config
+
+            def getini(self, name):
+                return self.config[name]
+
+        option = "disable_test_id_escaping_and_forfeit_all_rights_to_community_support"
+
+        values: list[tuple[Any, str]] = [
+            (MockConfig({option: True}), "ação"),
+            (MockConfig({option: False}), "a\\xe7\\xe3o"),
+        ]
+        for config, expected in values:
+            result = IdMaker(
+                ("a",),
+                [pytest.param("string", id="ação")],
+                None,
+                None,
+                config,
+                None,
+            ).make_unique_parameterset_ids()
+            assert result == [expected]
+
+    def test_idmaker_duplicated_empty_str(self) -> None:
+        """Regression test for empty strings parametrized more than once (#11563)."""
+        result = IdMaker(
+            ("a",), [pytest.param(""), pytest.param("")], None, None, None, None
+        ).make_unique_parameterset_ids()
+        assert result == ["0", "1"]
+
+    def test_parametrize_ids_exception(self, pytester: Pytester) -> None:
+        """
+        :param pytester: the instance of Pytester class, a temporary
         test directory.
         """
-        testdir.makepyfile(
+        pytester.makepyfile(
             """
                 import pytest
 
@@ -410,16 +710,16 @@ class TestMetafunc(object):
                     pass
             """
         )
-        result = testdir.runpytest()
+        result = pytester.runpytest()
         result.stdout.fnmatch_lines(
             [
-                "*test_foo: error raised while trying to determine id of parameter 'arg' at position 0",
                 "*Exception: bad ids",
+                "*test_foo: error raised while trying to determine id of parameter 'arg' at position 0",
             ]
         )
 
-    def test_parametrize_ids_returns_non_string(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_ids_returns_non_string(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """\
             import pytest
 
@@ -429,38 +729,59 @@ class TestMetafunc(object):
             @pytest.mark.parametrize("arg", ({1: 2}, {3, 4}), ids=ids)
             def test(arg):
                 assert arg
+
+            @pytest.mark.parametrize("arg", (1, 2.0, True), ids=ids)
+            def test_int(arg):
+                assert arg
             """
         )
-        assert testdir.runpytest().ret == 0
-
-    def test_idmaker_with_ids(self):
-        from _pytest.python import idmaker
-
-        result = idmaker(
-            ("a", "b"), [pytest.param(1, 2), pytest.param(3, 4)], ids=["a", None]
+        result = pytester.runpytest("-vv", "-s")
+        result.stdout.fnmatch_lines(
+            [
+                "test_parametrize_ids_returns_non_string.py::test[arg0] PASSED",
+                "test_parametrize_ids_returns_non_string.py::test[arg1] PASSED",
+                "test_parametrize_ids_returns_non_string.py::test_int[1] PASSED",
+                "test_parametrize_ids_returns_non_string.py::test_int[2.0] PASSED",
+                "test_parametrize_ids_returns_non_string.py::test_int[True] PASSED",
+            ]
         )
+
+    def test_idmaker_with_ids(self) -> None:
+        result = IdMaker(
+            ("a", "b"),
+            [pytest.param(1, 2), pytest.param(3, 4)],
+            None,
+            ["a", None],
+            None,
+            None,
+        ).make_unique_parameterset_ids()
         assert result == ["a", "3-4"]
 
-    def test_idmaker_with_paramset_id(self):
-        from _pytest.python import idmaker
-
-        result = idmaker(
+    def test_idmaker_with_paramset_id(self) -> None:
+        result = IdMaker(
             ("a", "b"),
             [pytest.param(1, 2, id="me"), pytest.param(3, 4, id="you")],
-            ids=["a", None],
-        )
+            None,
+            ["a", None],
+            None,
+            None,
+        ).make_unique_parameterset_ids()
         assert result == ["me", "you"]
 
-    def test_idmaker_with_ids_unique_names(self):
-        from _pytest.python import idmaker
-
-        result = idmaker(
-            ("a"), map(pytest.param, [1, 2, 3, 4, 5]), ids=["a", "a", "b", "c", "b"]
-        )
+    def test_idmaker_with_ids_unique_names(self) -> None:
+        result = IdMaker(
+            ("a"),
+            list(map(pytest.param, [1, 2, 3, 4, 5])),
+            None,
+            ["a", "a", "b", "c", "b"],
+            None,
+            None,
+        ).make_unique_parameterset_ids()
         assert result == ["a0", "a1", "b0", "c", "b1"]
 
-    @pytest.mark.issue(714)
-    def test_parametrize_indirect(self):
+    def test_parametrize_indirect(self) -> None:
+        """#714"""
+
         def func(x, y):
             pass
 
@@ -468,53 +789,66 @@ class TestMetafunc(object):
         metafunc.parametrize("x", [1], indirect=True)
         metafunc.parametrize("y", [2, 3], indirect=True)
         assert len(metafunc._calls) == 2
-        assert metafunc._calls[0].funcargs == {}
-        assert metafunc._calls[1].funcargs == {}
         assert metafunc._calls[0].params == dict(x=1, y=2)
         assert metafunc._calls[1].params == dict(x=1, y=3)
 
-    @pytest.mark.issue(714)
-    def test_parametrize_indirect_list(self):
+    def test_parametrize_indirect_list(self) -> None:
+        """#714"""
+
         def func(x, y):
             pass
 
         metafunc = self.Metafunc(func)
         metafunc.parametrize("x, y", [("a", "b")], indirect=["x"])
-        assert metafunc._calls[0].funcargs == dict(y="b")
-        assert metafunc._calls[0].params == dict(x="a")
+        assert metafunc._calls[0].params == dict(x="a", y="b")
+        # Since `y` is a direct parameter, its pseudo-fixture would
+        # be registered.
+        assert list(metafunc._arg2fixturedefs.keys()) == ["y"]
 
-    @pytest.mark.issue(714)
-    def test_parametrize_indirect_list_all(self):
+    def test_parametrize_indirect_list_all(self) -> None:
+        """#714"""
+
         def func(x, y):
             pass
 
         metafunc = self.Metafunc(func)
         metafunc.parametrize("x, y", [("a", "b")], indirect=["x", "y"])
-        assert metafunc._calls[0].funcargs == {}
         assert metafunc._calls[0].params == dict(x="a", y="b")
+        assert list(metafunc._arg2fixturedefs.keys()) == []
 
-    @pytest.mark.issue(714)
-    def test_parametrize_indirect_list_empty(self):
+    def test_parametrize_indirect_list_empty(self) -> None:
+        """#714"""
+
         def func(x, y):
             pass
 
         metafunc = self.Metafunc(func)
         metafunc.parametrize("x, y", [("a", "b")], indirect=[])
-        assert metafunc._calls[0].funcargs == dict(x="a", y="b")
-        assert metafunc._calls[0].params == {}
+        assert metafunc._calls[0].params == dict(x="a", y="b")
+        assert list(metafunc._arg2fixturedefs.keys()) == ["x", "y"]
 
-    @pytest.mark.issue(714)
-    def test_parametrize_indirect_list_functional(self, testdir):
+    def test_parametrize_indirect_wrong_type(self) -> None:
+        def func(x, y):
+            pass
+
+        metafunc = self.Metafunc(func)
+        with pytest.raises(
+            fail.Exception,
+            match="In mock::nodeid: expected Sequence or boolean for indirect, got dict",
+        ):
+            metafunc.parametrize("x, y", [("a", "b")], indirect={})  # type: ignore[arg-type]
+
+    def test_parametrize_indirect_list_functional(self, pytester: Pytester) -> None:
         """
+        #714
         Test parametrization with 'indirect' parameter applied on
-        particular arguments. As y is is direct, its value should
-        be used directly rather than being passed to the fixture
-        y.
+        particular arguments. As y is direct, its value should
+        be used directly rather than being passed to the fixture y.
 
-        :param testdir: the instance of Testdir class, a temporary
+        :param pytester: the instance of Pytester class, a temporary
         test directory.
         """
-        testdir.makepyfile(
+        pytester.makepyfile(
             """
             import pytest
             @pytest.fixture(scope='function')
@@ -529,26 +863,30 @@ class TestMetafunc(object):
                 assert len(y) == 1
         """
         )
-        result = testdir.runpytest("-v")
+        result = pytester.runpytest("-v")
         result.stdout.fnmatch_lines(["*test_simple*a-b*", "*1 passed*"])
 
-    @pytest.mark.issue(714)
-    def test_parametrize_indirect_list_error(self, testdir):
+    def test_parametrize_indirect_list_error(self) -> None:
+        """#714"""
+
         def func(x, y):
             pass
 
         metafunc = self.Metafunc(func)
-        with pytest.raises(pytest.fail.Exception):
+        with pytest.raises(fail.Exception):
             metafunc.parametrize("x, y", [("a", "b")], indirect=["x", "z"])
 
-    @pytest.mark.issue(714)
-    def test_parametrize_uses_no_fixture_error_indirect_false(self, testdir):
+    def test_parametrize_uses_no_fixture_error_indirect_false(
+        self, pytester: Pytester
+    ) -> None:
         """The 'uses no fixture' error tells the user at collection time
         that the parametrize data they've set up doesn't correspond to the
         fixtures in their test function, rather than silently ignoring this
         and letting the test potentially pass.
+
+        #714
         """
-        testdir.makepyfile(
+        pytester.makepyfile(
             """
             import pytest
 
@@ -557,12 +895,14 @@ class TestMetafunc(object):
                 assert len(x) == 3
         """
         )
-        result = testdir.runpytest("--collect-only")
+        result = pytester.runpytest("--collect-only")
         result.stdout.fnmatch_lines(["*uses no argument 'y'*"])
 
-    @pytest.mark.issue(714)
-    def test_parametrize_uses_no_fixture_error_indirect_true(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_uses_no_fixture_error_indirect_true(
+        self, pytester: Pytester
+    ) -> None:
+        """#714"""
+        pytester.makepyfile(
             """
             import pytest
             @pytest.fixture(scope='function')
@@ -577,12 +917,14 @@ class TestMetafunc(object):
                 assert len(x) == 3
         """
         )
-        result = testdir.runpytest("--collect-only")
+        result = pytester.runpytest("--collect-only")
         result.stdout.fnmatch_lines(["*uses no fixture 'y'*"])
 
-    @pytest.mark.issue(714)
-    def test_parametrize_indirect_uses_no_fixture_error_indirect_string(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_indirect_uses_no_fixture_error_indirect_string(
+        self, pytester: Pytester
+    ) -> None:
+        """#714"""
+        pytester.makepyfile(
             """
             import pytest
             @pytest.fixture(scope='function')
@@ -594,12 +936,14 @@ class TestMetafunc(object):
                 assert len(x) == 3
         """
         )
-        result = testdir.runpytest("--collect-only")
+        result = pytester.runpytest("--collect-only")
         result.stdout.fnmatch_lines(["*uses no fixture 'y'*"])
 
-    @pytest.mark.issue(714)
-    def test_parametrize_indirect_uses_no_fixture_error_indirect_list(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_indirect_uses_no_fixture_error_indirect_list(
+        self, pytester: Pytester
+    ) -> None:
+        """#714"""
+        pytester.makepyfile(
             """
             import pytest
             @pytest.fixture(scope='function')
@@ -611,12 +955,14 @@ class TestMetafunc(object):
                 assert len(x) == 3
         """
         )
-        result = testdir.runpytest("--collect-only")
+        result = pytester.runpytest("--collect-only")
         result.stdout.fnmatch_lines(["*uses no fixture 'y'*"])
 
-    @pytest.mark.issue(714)
-    def test_parametrize_argument_not_in_indirect_list(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_argument_not_in_indirect_list(
+        self, pytester: Pytester
+    ) -> None:
+        """#714"""
+        pytester.makepyfile(
             """
             import pytest
             @pytest.fixture(scope='function')
@@ -628,13 +974,13 @@ class TestMetafunc(object):
                 assert len(x) == 3
         """
         )
-        result = testdir.runpytest("--collect-only")
+        result = pytester.runpytest("--collect-only")
         result.stdout.fnmatch_lines(["*uses no argument 'y'*"])
 
     def test_parametrize_gives_indicative_error_on_function_with_default_argument(
-        self, testdir
-    ):
-        testdir.makepyfile(
+        self, pytester: Pytester
+    ) -> None:
+        pytester.makepyfile(
             """
             import pytest
 
@@ -643,13 +989,13 @@ class TestMetafunc(object):
                 assert len(x) == 1
         """
         )
-        result = testdir.runpytest("--collect-only")
+        result = pytester.runpytest("--collect-only")
         result.stdout.fnmatch_lines(
             ["*already takes an argument 'y' with a default value"]
         )
 
-    def test_parametrize_functional(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_functional(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
             def pytest_generate_tests(metafunc):
@@ -664,21 +1010,21 @@ class TestMetafunc(object):
                 assert y == 2
         """
         )
-        result = testdir.runpytest("-v")
+        result = pytester.runpytest("-v")
         result.stdout.fnmatch_lines(
             ["*test_simple*1-2*", "*test_simple*2-2*", "*2 passed*"]
         )
 
-    def test_parametrize_onearg(self):
+    def test_parametrize_onearg(self) -> None:
         metafunc = self.Metafunc(lambda x: None)
         metafunc.parametrize("x", [1, 2])
         assert len(metafunc._calls) == 2
-        assert metafunc._calls[0].funcargs == dict(x=1)
+        assert metafunc._calls[0].params == dict(x=1)
         assert metafunc._calls[0].id == "1"
-        assert metafunc._calls[1].funcargs == dict(x=2)
+        assert metafunc._calls[1].params == dict(x=2)
         assert metafunc._calls[1].id == "2"
 
-    def test_parametrize_onearg_indirect(self):
+    def test_parametrize_onearg_indirect(self) -> None:
         metafunc = self.Metafunc(lambda x: None)
         metafunc.parametrize("x", [1, 2], indirect=True)
         assert metafunc._calls[0].params == dict(x=1)
@@ -686,17 +1032,51 @@ class TestMetafunc(object):
         assert metafunc._calls[1].params == dict(x=2)
         assert metafunc._calls[1].id == "2"
 
-    def test_parametrize_twoargs(self):
+    def test_parametrize_twoargs(self) -> None:
         metafunc = self.Metafunc(lambda x, y: None)
         metafunc.parametrize(("x", "y"), [(1, 2), (3, 4)])
         assert len(metafunc._calls) == 2
-        assert metafunc._calls[0].funcargs == dict(x=1, y=2)
+        assert metafunc._calls[0].params == dict(x=1, y=2)
         assert metafunc._calls[0].id == "1-2"
-        assert metafunc._calls[1].funcargs == dict(x=3, y=4)
+        assert metafunc._calls[1].params == dict(x=3, y=4)
         assert metafunc._calls[1].id == "3-4"
 
-    def test_parametrize_multiple_times(self, testdir):
-        testdir.makepyfile(
+    def test_high_scoped_parametrize_reordering(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            @pytest.mark.parametrize("arg2", [3, 4])
+            @pytest.mark.parametrize("arg1", [0, 1, 2], scope='module')
+            def test1(arg1, arg2):
+                pass
+
+            def test2():
+                pass
+
+            @pytest.mark.parametrize("arg1", [0, 1, 2], scope='module')
+            def test3(arg1):
+                pass
+        """
+        )
+        result = pytester.runpytest("--collect-only")
+        result.stdout.re_match_lines(
+            [
+                r"    <Function test1\[0-3\]>",
+                r"    <Function test3\[0\]>",
+                r"    <Function test1\[0-4\]>",
+                r"    <Function test3\[1\]>",
+                r"    <Function test1\[1-3\]>",
+                r"    <Function test3\[2\]>",
+                r"    <Function test1\[1-4\]>",
+                r"    <Function test1\[2-3\]>",
+                r"    <Function test1\[2-4\]>",
+                r"    <Function test2>",
+            ]
+        )
+
+    def test_parametrize_multiple_times(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
             pytestmark = pytest.mark.parametrize("x", [1,2])
@@ -708,12 +1088,12 @@ class TestMetafunc(object):
                     assert 0, x
         """
         )
-        result = testdir.runpytest()
+        result = pytester.runpytest()
         assert result.ret == 1
         result.assert_outcomes(failed=6)
 
-    def test_parametrize_CSV(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_CSV(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
             @pytest.mark.parametrize("x, y,", [(1,2), (2,3)])
@@ -721,11 +1101,11 @@ class TestMetafunc(object):
                 assert x+1 == y
         """
         )
-        reprec = testdir.inline_run()
+        reprec = pytester.inline_run()
         reprec.assertoutcome(passed=2)
 
-    def test_parametrize_class_scenarios(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_class_scenarios(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
         # same as doc/en/example/parametrize scenario example
         def pytest_generate_tests(metafunc):
@@ -752,7 +1132,7 @@ class TestMetafunc(object):
                   pass
         """
         )
-        result = testdir.runpytest("-v")
+        result = pytester.runpytest("-v")
         assert result.ret == 0
         result.stdout.fnmatch_lines(
             """
@@ -766,34 +1146,31 @@ class TestMetafunc(object):
         """
         )
 
-    def test_format_args(self):
-        def function1():
-            pass
+    def test_parametrize_iterator_deprecation(self) -> None:
+        """Test that using iterators for argvalues raises a deprecation warning."""
 
-        assert fixtures._format_args(function1) == "()"
+        def func(x: int) -> None:
+            raise NotImplementedError()
 
-        def function2(arg1):
-            pass
+        def data_generator() -> Iterator[int]:
+            yield 1
+            yield 2
 
-        assert fixtures._format_args(function2) == "(arg1)"
+        metafunc = self.Metafunc(func)
 
-        def function3(arg1, arg2="qwe"):
-            pass
-
-        assert fixtures._format_args(function3) == "(arg1, arg2='qwe')"
-
-        def function4(arg1, *args, **kwargs):
-            pass
-
-        assert fixtures._format_args(function4) == "(arg1, *args, **kwargs)"
+        with pytest.warns(
+            pytest.PytestRemovedIn10Warning,
+            match=r"Passing a non-Collection iterable to parametrize is deprecated",
+        ):
+            metafunc.parametrize("x", data_generator())
 
 
-class TestMetafuncFunctional(object):
-    def test_attributes(self, testdir):
-        p = testdir.makepyfile(
+class TestMetafuncFunctional:
+    def test_attributes(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
             """
             # assumes that generate/provide runs in the same process
-            import sys, pytest, six
+            import sys, pytest
             def pytest_generate_tests(metafunc):
                 metafunc.parametrize('metafunc', [metafunc])
 
@@ -811,16 +1188,16 @@ class TestMetafuncFunctional(object):
                 def test_method(self, metafunc, pytestconfig):
                     assert metafunc.config == pytestconfig
                     assert metafunc.module.__name__ == __name__
-                    unbound = six.get_unbound_function(TestClass.test_method)
+                    unbound = TestClass.test_method
                     assert metafunc.function == unbound
                     assert metafunc.cls == TestClass
         """
         )
-        result = testdir.runpytest(p, "-v", SHOW_PYTEST_WARNINGS_ARG)
+        result = pytester.runpytest(p, "-v")
         result.assert_outcomes(passed=2)
 
-    def test_two_functions(self, testdir):
-        p = testdir.makepyfile(
+    def test_two_functions(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
             """
             def pytest_generate_tests(metafunc):
                 metafunc.parametrize('arg1', [10, 20], ids=['0', '1'])
@@ -832,7 +1209,7 @@ class TestMetafuncFunctional(object):
                 assert arg1 in (10, 20)
         """
         )
-        result = testdir.runpytest("-v", p, SHOW_PYTEST_WARNINGS_ARG)
+        result = pytester.runpytest("-v", p)
         result.stdout.fnmatch_lines(
             [
                 "*test_func1*0*PASS*",
@@ -843,8 +1220,8 @@ class TestMetafuncFunctional(object):
             ]
         )
 
-    def test_noself_in_method(self, testdir):
-        p = testdir.makepyfile(
+    def test_noself_in_method(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
             """
             def pytest_generate_tests(metafunc):
                 assert 'xyz' not in metafunc.fixturenames
@@ -854,11 +1231,11 @@ class TestMetafuncFunctional(object):
                     pass
         """
         )
-        result = testdir.runpytest(p)
+        result = pytester.runpytest(p)
         result.assert_outcomes(passed=1)
 
-    def test_generate_tests_in_class(self, testdir):
-        p = testdir.makepyfile(
+    def test_generate_tests_in_class(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
             """
             class TestClass(object):
                 def pytest_generate_tests(self, metafunc):
@@ -868,11 +1245,11 @@ class TestMetafuncFunctional(object):
                     assert hello == "world"
         """
         )
-        result = testdir.runpytest("-v", p, SHOW_PYTEST_WARNINGS_ARG)
+        result = pytester.runpytest("-v", p)
         result.stdout.fnmatch_lines(["*test_myfunc*hello*PASS*", "*1 passed*"])
 
-    def test_two_functions_not_same_instance(self, testdir):
-        p = testdir.makepyfile(
+    def test_two_functions_not_same_instance(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
             """
             def pytest_generate_tests(metafunc):
                 metafunc.parametrize('arg1', [10, 20], ids=["0", "1"])
@@ -883,13 +1260,13 @@ class TestMetafuncFunctional(object):
                     self.x = 1
         """
         )
-        result = testdir.runpytest("-v", p, SHOW_PYTEST_WARNINGS_ARG)
+        result = pytester.runpytest("-v", p)
         result.stdout.fnmatch_lines(
             ["*test_func*0*PASS*", "*test_func*1*PASS*", "*2 pass*"]
         )
 
-    def test_issue28_setup_method_in_generate_tests(self, testdir):
-        p = testdir.makepyfile(
+    def test_issue28_setup_method_in_generate_tests(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
             """
             def pytest_generate_tests(metafunc):
                 metafunc.parametrize('arg1', [1])
@@ -901,11 +1278,11 @@ class TestMetafuncFunctional(object):
                     self.val = 1
             """
         )
-        result = testdir.runpytest(p, SHOW_PYTEST_WARNINGS_ARG)
+        result = pytester.runpytest(p)
         result.assert_outcomes(passed=1)
 
-    def test_parametrize_functional2(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_functional2(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             def pytest_generate_tests(metafunc):
                 metafunc.parametrize("arg1", [1,2])
@@ -914,13 +1291,48 @@ class TestMetafuncFunctional(object):
                 assert 0, (arg1, arg2)
         """
         )
-        result = testdir.runpytest()
+        result = pytester.runpytest()
         result.stdout.fnmatch_lines(
             ["*(1, 4)*", "*(1, 5)*", "*(2, 4)*", "*(2, 5)*", "*4 failed*"]
         )
 
-    def test_parametrize_and_inner_getfixturevalue(self, testdir):
-        p = testdir.makepyfile(
+    def test_parametrize_single_arg_trailing_comma_functional(
+        self, pytester: Pytester
+    ) -> None:
+        """Test that trailing comma in string argnames behaves like tuple argnames.
+
+        Regression test for https://github.com/pytest-dev/pytest/issues/719
+        """
+        pytester.makepyfile(
+            """
+            import pytest
+
+            scenarios = [('a',), ('b',)]
+
+            @pytest.mark.parametrize(("arg",), scenarios)
+            def test_tuple_form(arg):
+                # Tuple argnames: values are unpacked from tuples
+                assert arg in ('a', 'b')
+                assert isinstance(arg, str)
+
+            @pytest.mark.parametrize("arg,", scenarios)
+            def test_string_trailing_comma(arg):
+                # String with trailing comma: should behave like tuple form
+                assert arg in ('a', 'b')
+                assert isinstance(arg, str)
+
+            @pytest.mark.parametrize("arg", scenarios)
+            def test_string_no_comma(arg):
+                # String without comma: tuples are passed as-is
+                assert arg in (('a',), ('b',))
+                assert isinstance(arg, tuple)
+        """
+        )
+        result = pytester.runpytest("-v")
+        result.assert_outcomes(passed=6)
+
+    def test_parametrize_and_inner_getfixturevalue(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
             """
             def pytest_generate_tests(metafunc):
                 metafunc.parametrize("arg1", [1], indirect=True)
@@ -940,11 +1352,11 @@ class TestMetafuncFunctional(object):
                 assert arg1 == 11
         """
         )
-        result = testdir.runpytest("-v", p)
+        result = pytester.runpytest("-v", p)
         result.stdout.fnmatch_lines(["*test_func1*1*PASS*", "*1 passed*"])
 
-    def test_parametrize_on_setup_arg(self, testdir):
-        p = testdir.makepyfile(
+    def test_parametrize_on_setup_arg(self, pytester: Pytester) -> None:
+        p = pytester.makepyfile(
             """
             def pytest_generate_tests(metafunc):
                 assert "arg1" in metafunc.fixturenames
@@ -963,17 +1375,17 @@ class TestMetafuncFunctional(object):
                 assert arg2 == 10
         """
         )
-        result = testdir.runpytest("-v", p)
+        result = pytester.runpytest("-v", p)
         result.stdout.fnmatch_lines(["*test_func*1*PASS*", "*1 passed*"])
 
-    def test_parametrize_with_ids(self, testdir):
-        testdir.makeini(
+    def test_parametrize_with_ids(self, pytester: Pytester) -> None:
+        pytester.makeini(
             """
             [pytest]
             console_output_style=classic
         """
         )
-        testdir.makepyfile(
+        pytester.makepyfile(
             """
             import pytest
             def pytest_generate_tests(metafunc):
@@ -984,14 +1396,14 @@ class TestMetafuncFunctional(object):
                 assert a == b
         """
         )
-        result = testdir.runpytest("-v")
+        result = pytester.runpytest("-v")
         assert result.ret == 1
         result.stdout.fnmatch_lines_random(
             ["*test_function*basic*PASSED", "*test_function*advanced*FAILED"]
         )
 
-    def test_parametrize_without_ids(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_without_ids(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
             def pytest_generate_tests(metafunc):
@@ -1002,7 +1414,7 @@ class TestMetafuncFunctional(object):
                 assert 1
         """
         )
-        result = testdir.runpytest("-v")
+        result = pytester.runpytest("-v")
         result.stdout.fnmatch_lines(
             """
             *test_function*1-b0*
@@ -1010,8 +1422,8 @@ class TestMetafuncFunctional(object):
         """
         )
 
-    def test_parametrize_with_None_in_ids(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_with_None_in_ids(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
             def pytest_generate_tests(metafunc):
@@ -1022,7 +1434,7 @@ class TestMetafuncFunctional(object):
                 assert a == b
         """
         )
-        result = testdir.runpytest("-v")
+        result = pytester.runpytest("-v")
         assert result.ret == 1
         result.stdout.fnmatch_lines_random(
             [
@@ -1032,9 +1444,9 @@ class TestMetafuncFunctional(object):
             ]
         )
 
-    def test_fixture_parametrized_empty_ids(self, testdir):
+    def test_fixture_parametrized_empty_ids(self, pytester: Pytester) -> None:
         """Fixtures parametrized with empty ids cause an internal error (#1849)."""
-        testdir.makepyfile(
+        pytester.makepyfile(
             """
             import pytest
 
@@ -1046,12 +1458,12 @@ class TestMetafuncFunctional(object):
                  pass
         """
         )
-        result = testdir.runpytest()
+        result = pytester.runpytest()
         result.stdout.fnmatch_lines(["* 1 skipped *"])
 
-    def test_parametrized_empty_ids(self, testdir):
+    def test_parametrized_empty_ids(self, pytester: Pytester) -> None:
         """Tests parametrized with empty ids cause an internal error (#1849)."""
-        testdir.makepyfile(
+        pytester.makepyfile(
             """
             import pytest
 
@@ -1060,29 +1472,33 @@ class TestMetafuncFunctional(object):
                  pass
         """
         )
-        result = testdir.runpytest()
+        result = pytester.runpytest()
         result.stdout.fnmatch_lines(["* 1 skipped *"])
 
-    def test_parametrized_ids_invalid_type(self, testdir):
-        """Tests parametrized with ids as non-strings (#1857)."""
-        testdir.makepyfile(
+    def test_parametrized_ids_invalid_type(self, pytester: Pytester) -> None:
+        """Test error with non-strings/non-ints, without generator (#1857)."""
+        pytester.makepyfile(
             """
             import pytest
 
-            @pytest.mark.parametrize("x, expected", [(10, 20), (40, 80)], ids=(None, 2))
+            @pytest.mark.parametrize("x, expected", [(1, 2), (3, 4), (5, 6)], ids=(None, 2, OSError()))
             def test_ids_numbers(x,expected):
                 assert x * 2 == expected
         """
         )
-        result = testdir.runpytest()
+        result = pytester.runpytest()
         result.stdout.fnmatch_lines(
             [
-                "*In test_ids_numbers: ids must be list of strings, found: 2 (type: *'int'>)*"
+                "In test_parametrized_ids_invalid_type.py::test_ids_numbers: ids contains unsupported value "
+                "OSError() (type: <class 'OSError'>) at index 2. "
+                "Supported types are: str, bytes, int, float, complex, bool, enum, regex or anything with a __name__."
             ]
         )
 
-    def test_parametrize_with_identical_ids_get_unique_names(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_with_identical_ids_get_unique_names(
+        self, pytester: Pytester
+    ) -> None:
+        pytester.makepyfile(
             """
             import pytest
             def pytest_generate_tests(metafunc):
@@ -1093,22 +1509,24 @@ class TestMetafuncFunctional(object):
                 assert a == b
         """
         )
-        result = testdir.runpytest("-v")
+        result = pytester.runpytest("-v")
         assert result.ret == 1
         result.stdout.fnmatch_lines_random(
             ["*test_function*a0*PASSED*", "*test_function*a1*FAILED*"]
         )
 
     @pytest.mark.parametrize(("scope", "length"), [("module", 2), ("function", 4)])
-    def test_parametrize_scope_overrides(self, testdir, scope, length):
-        testdir.makepyfile(
-            """
+    def test_parametrize_scope_overrides(
+        self, pytester: Pytester, scope: str, length: int
+    ) -> None:
+        pytester.makepyfile(
+            f"""
             import pytest
             values = []
             def pytest_generate_tests(metafunc):
-                if "arg" in metafunc.funcargnames:
+                if "arg" in metafunc.fixturenames:
                     metafunc.parametrize("arg", [1,2], indirect=True,
-                                         scope=%r)
+                                         scope={scope!r})
             @pytest.fixture
             def arg(request):
                 values.append(request.param)
@@ -1118,15 +1536,14 @@ class TestMetafuncFunctional(object):
             def test_world(arg):
                 assert arg in (1,2)
             def test_checklength():
-                assert len(values) == %d
+                assert len(values) == {length}
         """
-            % (scope, length)
         )
-        reprec = testdir.inline_run()
+        reprec = pytester.inline_run()
         reprec.assertoutcome(passed=5)
 
-    def test_parametrize_issue323(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_issue323(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
 
@@ -1140,11 +1557,11 @@ class TestMetafuncFunctional(object):
                 pass
         """
         )
-        reprec = testdir.inline_run("--collect-only")
+        reprec = pytester.inline_run("--collect-only")
         assert not reprec.getcalls("pytest_internalerror")
 
-    def test_usefixtures_seen_in_generate_tests(self, testdir):
-        testdir.makepyfile(
+    def test_usefixtures_seen_in_generate_tests(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
             def pytest_generate_tests(metafunc):
@@ -1156,35 +1573,41 @@ class TestMetafuncFunctional(object):
                 pass
         """
         )
-        reprec = testdir.runpytest()
+        reprec = pytester.runpytest()
         reprec.assert_outcomes(passed=1)
 
-    def test_generate_tests_only_done_in_subdir(self, testdir):
-        sub1 = testdir.mkpydir("sub1")
-        sub2 = testdir.mkpydir("sub2")
-        sub1.join("conftest.py").write(
+    def test_generate_tests_only_done_in_subdir(self, pytester: Pytester) -> None:
+        sub1 = pytester.mkpydir("sub1")
+        sub2 = pytester.mkpydir("sub2")
+        sub1.joinpath("conftest.py").write_text(
             textwrap.dedent(
                 """\
                 def pytest_generate_tests(metafunc):
                     assert metafunc.function.__name__ == "test_1"
                 """
-            )
+            ),
+            encoding="utf-8",
         )
-        sub2.join("conftest.py").write(
+        sub2.joinpath("conftest.py").write_text(
             textwrap.dedent(
                 """\
                 def pytest_generate_tests(metafunc):
                     assert metafunc.function.__name__ == "test_2"
                 """
-            )
+            ),
+            encoding="utf-8",
         )
-        sub1.join("test_in_sub1.py").write("def test_1(): pass")
-        sub2.join("test_in_sub2.py").write("def test_2(): pass")
-        result = testdir.runpytest("--keep-duplicates", "-v", "-s", sub1, sub2, sub1)
+        sub1.joinpath("test_in_sub1.py").write_text(
+            "def test_1(): pass", encoding="utf-8"
+        )
+        sub2.joinpath("test_in_sub2.py").write_text(
+            "def test_2(): pass", encoding="utf-8"
+        )
+        result = pytester.runpytest("--keep-duplicates", "-v", "-s", sub1, sub2, sub1)
         result.assert_outcomes(passed=3)
 
-    def test_generate_same_function_names_issue403(self, testdir):
-        testdir.makepyfile(
+    def test_generate_same_function_names_issue403(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
 
@@ -1198,39 +1621,210 @@ class TestMetafuncFunctional(object):
             test_y = make_tests()
         """
         )
-        reprec = testdir.runpytest()
+        reprec = pytester.runpytest()
         reprec.assert_outcomes(passed=4)
 
-    @pytest.mark.issue(463)
-    @pytest.mark.parametrize("attr", ["parametrise", "parameterize", "parameterise"])
-    def test_parametrize_misspelling(self, testdir, attr):
-        testdir.makepyfile(
+    def test_parametrize_misspelling(self, pytester: Pytester) -> None:
+        """#463"""
+        pytester.makepyfile(
             """
             import pytest
 
-            @pytest.mark.{}("x", range(2))
+            @pytest.mark.parametrise("x", range(2))
             def test_foo(x):
                 pass
-        """.format(
-                attr
-            )
+        """
         )
-        result = testdir.runpytest("--collectonly")
+        result = pytester.runpytest("--collect-only")
         result.stdout.fnmatch_lines(
             [
-                "test_foo has '{}' mark, spelling should be 'parametrize'".format(attr),
-                "*1 error in*",
+                "collected 0 items / 1 error",
+                "",
+                "*= ERRORS =*",
+                "*_ ERROR collecting test_parametrize_misspelling.py _*",
+                "test_parametrize_misspelling.py:3: in <module>",
+                '    @pytest.mark.parametrise("x", range(2))',
+                "E   Failed: Unknown 'parametrise' mark, did you mean 'parametrize'?",
+                "*! Interrupted: 1 error during collection !*",
+                "*= no tests collected, 1 error in *",
+            ]
+        )
+
+    @pytest.mark.parametrize("scope", ["class", "package"])
+    def test_parametrize_missing_scope_doesnt_crash(
+        self, pytester: Pytester, scope: str
+    ) -> None:
+        """Doesn't crash when parametrize(scope=<scope>) is used without a
+        corresponding <scope> node."""
+        pytester.makepyfile(
+            f"""
+            import pytest
+
+            @pytest.mark.parametrize("x", [0], scope="{scope}")
+            def test_it(x): pass
+            """
+        )
+        result = pytester.runpytest()
+        assert result.ret == 0
+
+    def test_parametrize_module_level_test_with_class_scope(
+        self, pytester: Pytester
+    ) -> None:
+        """
+        Test that a class-scoped parametrization without a corresponding `Class`
+        gets module scope, i.e. we only create a single FixtureDef for it per module.
+        """
+        module = pytester.makepyfile(
+            """
+            import pytest
+
+            @pytest.mark.parametrize("x", [0, 1], scope="class")
+            def test_1(x):
+                pass
+
+            @pytest.mark.parametrize("x", [1, 2], scope="module")
+            def test_2(x):
+                pass
+        """
+        )
+        test_1_0, _, test_2_0, _ = pytester.genitems((pytester.getmodulecol(module),))
+
+        assert isinstance(test_1_0, Function)
+        assert test_1_0.name == "test_1[0]"
+        test_1_fixture_x = test_1_0._fixtureinfo.name2fixturedefs["x"][-1]
+
+        assert isinstance(test_2_0, Function)
+        assert test_2_0.name == "test_2[1]"
+        test_2_fixture_x = test_2_0._fixtureinfo.name2fixturedefs["x"][-1]
+
+        assert test_1_fixture_x is test_2_fixture_x
+
+    def test_reordering_with_scopeless_and_just_indirect_parametrization(
+        self, pytester: Pytester
+    ) -> None:
+        pytester.makeconftest(
+            """
+            import pytest
+
+            @pytest.fixture(scope="package")
+            def fixture1():
+                pass
+            """
+        )
+        pytester.makepyfile(
+            """
+            import pytest
+
+            @pytest.fixture(scope="module")
+            def fixture0():
+                pass
+
+            @pytest.fixture(scope="module")
+            def fixture1(fixture0):
+                pass
+
+            @pytest.mark.parametrize("fixture1", [0], indirect=True)
+            def test_0(fixture1):
+                pass
+
+            @pytest.fixture(scope="module")
+            def fixture():
+                pass
+
+            @pytest.mark.parametrize("fixture", [0], indirect=True)
+            def test_1(fixture):
+                pass
+
+            def test_2():
+                pass
+
+            class Test:
+                @pytest.fixture(scope="class")
+                def fixture(self, fixture):
+                    pass
+
+                @pytest.mark.parametrize("fixture", [0], indirect=True)
+                def test_3(self, fixture):
+                    pass
+            """
+        )
+        result = pytester.runpytest("-v")
+        assert result.ret == 0
+        result.stdout.fnmatch_lines(
+            [
+                "*test_0*",
+                "*test_1*",
+                "*test_2*",
+                "*test_3*",
+            ]
+        )
+
+    def test_parametrize_generator_multiple_runs(self, pytester: Pytester) -> None:
+        """Test that generators in parametrize work with multiple pytest.main() (deprecated)."""
+        testfile = pytester.makepyfile(
+            """
+            import pytest
+
+            def data_generator():
+                yield 1
+                yield 2
+
+            @pytest.mark.parametrize("bar", data_generator())
+            def test_foo(bar):
+                pass
+
+            if __name__ == '__main__':
+                args = ["-q", "--collect-only"]
+                pytest.main(args)  # First run - should work with warning
+                pytest.main(args)  # Second run - should also work with warning
+            """
+        )
+        result = pytester.run(sys.executable, "-Wdefault", testfile)
+        # Should see the deprecation warnings.
+        result.stdout.fnmatch_lines(
+            [
+                "*PytestRemovedIn10Warning: Passing a non-Collection iterable*",
+                "*PytestRemovedIn10Warning: Passing a non-Collection iterable*",
+            ]
+        )
+
+    def test_parametrize_iterator_class_multiple_tests(
+        self, pytester: Pytester
+    ) -> None:
+        """Test that iterators in parametrize on a class get exhausted (deprecated)."""
+        pytester.makepyfile(
+            """
+            import pytest
+
+            @pytest.mark.parametrize("n", iter(range(2)))
+            class Test:
+                def test_1(self, n):
+                    pass
+
+                def test_2(self, n):
+                    pass
+            """
+        )
+        result = pytester.runpytest("-v", "-Wdefault")
+        # Iterator gets exhausted after first test, second test gets no parameters.
+        # This is deprecated.
+        result.assert_outcomes(passed=2, skipped=1)
+        result.stdout.fnmatch_lines(
+            [
+                "*test_parametrize_iterator_class_multiple_tests.py::Test::test_1[[]0] PASSED*",
+                "*test_parametrize_iterator_class_multiple_tests.py::Test::test_1[[]1] PASSED*",
+                "*test_parametrize_iterator_class_multiple_tests.py::Test::test_2[[]NOTSET] SKIPPED*",
+                "*PytestRemovedIn10Warning: Passing a non-Collection iterable*",
             ]
         )
 
 
-class TestMetafuncFunctionalAuto(object):
-    """
-    Tests related to automatically find out the correct scope for parametrized tests (#1832).
-    """
+class TestMetafuncFunctionalAuto:
+    """Tests related to automatically find out the correct scope for
+    parametrized tests (#1832)."""
 
-    def test_parametrize_auto_scope(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_auto_scope(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
 
@@ -1248,11 +1842,11 @@ class TestMetafuncFunctionalAuto(object):
 
         """
         )
-        result = testdir.runpytest()
+        result = pytester.runpytest()
         result.stdout.fnmatch_lines(["* 3 passed *"])
 
-    def test_parametrize_auto_scope_indirect(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_auto_scope_indirect(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
 
@@ -1271,11 +1865,11 @@ class TestMetafuncFunctionalAuto(object):
                 assert echo in (1, 2, 3)
         """
         )
-        result = testdir.runpytest()
+        result = pytester.runpytest()
         result.stdout.fnmatch_lines(["* 3 passed *"])
 
-    def test_parametrize_auto_scope_override_fixture(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_auto_scope_override_fixture(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
 
@@ -1288,11 +1882,11 @@ class TestMetafuncFunctionalAuto(object):
                 assert animal in ('dog', 'cat')
         """
         )
-        result = testdir.runpytest()
+        result = pytester.runpytest()
         result.stdout.fnmatch_lines(["* 2 passed *"])
 
-    def test_parametrize_all_indirects(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_all_indirects(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
 
@@ -1315,17 +1909,19 @@ class TestMetafuncFunctionalAuto(object):
                 assert echo in (1, 2, 3)
         """
         )
-        result = testdir.runpytest()
+        result = pytester.runpytest()
         result.stdout.fnmatch_lines(["* 3 passed *"])
 
-    def test_parametrize_some_arguments_auto_scope(self, testdir, monkeypatch):
+    def test_parametrize_some_arguments_auto_scope(
+        self, pytester: Pytester, monkeypatch
+    ) -> None:
         """Integration test for (#3941)"""
-        class_fix_setup = []
+        class_fix_setup: list[object] = []
         monkeypatch.setattr(sys, "class_fix_setup", class_fix_setup, raising=False)
-        func_fix_setup = []
+        func_fix_setup: list[object] = []
         monkeypatch.setattr(sys, "func_fix_setup", func_fix_setup, raising=False)
 
-        testdir.makepyfile(
+        pytester.makepyfile(
             """
             import pytest
             import sys
@@ -1346,13 +1942,13 @@ class TestMetafuncFunctionalAuto(object):
                     pass
             """
         )
-        result = testdir.runpytest_inprocess()
+        result = pytester.runpytest_inprocess()
         result.stdout.fnmatch_lines(["* 4 passed in *"])
         assert func_fix_setup == [True] * 4
         assert class_fix_setup == [10, 20]
 
-    def test_parametrize_issue634(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_issue634(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
             """
             import pytest
 
@@ -1380,15 +1976,16 @@ class TestMetafuncFunctionalAuto(object):
                 metafunc.parametrize('foo', params, indirect=True)
         """
         )
-        result = testdir.runpytest("-s")
+        result = pytester.runpytest("-s")
         output = result.stdout.str()
         assert output.count("preparing foo-2") == 1
         assert output.count("preparing foo-3") == 1
 
 
-@pytest.mark.issue(308)
-class TestMarkersWithParametrization(object):
-    def test_simple_mark(self, testdir):
+class TestMarkersWithParametrization:
+    """#308"""
+
+    def test_simple_mark(self, pytester: Pytester) -> None:
         s = """
             import pytest
 
@@ -1401,7 +1998,7 @@ class TestMarkersWithParametrization(object):
             def test_increment(n, expected):
                 assert n + 1 == expected
         """
-        items = testdir.getitems(s)
+        items = pytester.getitems(s)
         assert len(items) == 3
         for item in items:
             assert "foo" in item.keywords
@@ -1409,7 +2006,7 @@ class TestMarkersWithParametrization(object):
         assert "bar" in items[1].keywords
         assert "bar" not in items[2].keywords
 
-    def test_select_based_on_mark(self, testdir):
+    def test_select_based_on_mark(self, pytester: Pytester) -> None:
         s = """
             import pytest
 
@@ -1421,35 +2018,14 @@ class TestMarkersWithParametrization(object):
             def test_increment(n, expected):
                 assert n + 1 == expected
         """
-        testdir.makepyfile(s)
-        rec = testdir.inline_run("-m", "foo", SHOW_PYTEST_WARNINGS_ARG)
+        pytester.makepyfile(s)
+        rec = pytester.inline_run("-m", "foo")
         passed, skipped, fail = rec.listoutcomes()
         assert len(passed) == 1
         assert len(skipped) == 0
         assert len(fail) == 0
 
-    @pytest.mark.xfail(reason="is this important to support??")
-    def test_nested_marks(self, testdir):
-        s = """
-            import pytest
-            mastermark = pytest.mark.foo(pytest.mark.bar)
-
-            @pytest.mark.parametrize(("n", "expected"), [
-                (1, 2),
-                mastermark((1, 3)),
-                (2, 3),
-            ])
-            def test_increment(n, expected):
-                assert n + 1 == expected
-        """
-        items = testdir.getitems(s)
-        assert len(items) == 3
-        for mark in ["foo", "bar"]:
-            assert mark not in items[0].keywords
-            assert mark in items[1].keywords
-            assert mark not in items[2].keywords
-
-    def test_simple_xfail(self, testdir):
+    def test_simple_xfail(self, pytester: Pytester) -> None:
         s = """
             import pytest
 
@@ -1461,12 +2037,12 @@ class TestMarkersWithParametrization(object):
             def test_increment(n, expected):
                 assert n + 1 == expected
         """
-        testdir.makepyfile(s)
-        reprec = testdir.inline_run(SHOW_PYTEST_WARNINGS_ARG)
+        pytester.makepyfile(s)
+        reprec = pytester.inline_run()
         # xfail is skip??
         reprec.assertoutcome(passed=2, skipped=1)
 
-    def test_simple_xfail_single_argname(self, testdir):
+    def test_simple_xfail_single_argname(self, pytester: Pytester) -> None:
         s = """
             import pytest
 
@@ -1478,11 +2054,11 @@ class TestMarkersWithParametrization(object):
             def test_isEven(n):
                 assert n % 2 == 0
         """
-        testdir.makepyfile(s)
-        reprec = testdir.inline_run(SHOW_PYTEST_WARNINGS_ARG)
+        pytester.makepyfile(s)
+        reprec = pytester.inline_run()
         reprec.assertoutcome(passed=2, skipped=1)
 
-    def test_xfail_with_arg(self, testdir):
+    def test_xfail_with_arg(self, pytester: Pytester) -> None:
         s = """
             import pytest
 
@@ -1494,11 +2070,11 @@ class TestMarkersWithParametrization(object):
             def test_increment(n, expected):
                 assert n + 1 == expected
         """
-        testdir.makepyfile(s)
-        reprec = testdir.inline_run(SHOW_PYTEST_WARNINGS_ARG)
+        pytester.makepyfile(s)
+        reprec = pytester.inline_run()
         reprec.assertoutcome(passed=2, skipped=1)
 
-    def test_xfail_with_kwarg(self, testdir):
+    def test_xfail_with_kwarg(self, pytester: Pytester) -> None:
         s = """
             import pytest
 
@@ -1510,11 +2086,11 @@ class TestMarkersWithParametrization(object):
             def test_increment(n, expected):
                 assert n + 1 == expected
         """
-        testdir.makepyfile(s)
-        reprec = testdir.inline_run(SHOW_PYTEST_WARNINGS_ARG)
+        pytester.makepyfile(s)
+        reprec = pytester.inline_run()
         reprec.assertoutcome(passed=2, skipped=1)
 
-    def test_xfail_with_arg_and_kwarg(self, testdir):
+    def test_xfail_with_arg_and_kwarg(self, pytester: Pytester) -> None:
         s = """
             import pytest
 
@@ -1526,13 +2102,13 @@ class TestMarkersWithParametrization(object):
             def test_increment(n, expected):
                 assert n + 1 == expected
         """
-        testdir.makepyfile(s)
-        reprec = testdir.inline_run(SHOW_PYTEST_WARNINGS_ARG)
+        pytester.makepyfile(s)
+        reprec = pytester.inline_run()
         reprec.assertoutcome(passed=2, skipped=1)
 
     @pytest.mark.parametrize("strict", [True, False])
-    def test_xfail_passing_is_xpass(self, testdir, strict):
-        s = """
+    def test_xfail_passing_is_xpass(self, pytester: Pytester, strict: bool) -> None:
+        s = f"""
             import pytest
 
             m = pytest.mark.xfail("sys.version_info > (0, 0, 0)", reason="some bug", strict={strict})
@@ -1544,15 +2120,13 @@ class TestMarkersWithParametrization(object):
             ])
             def test_increment(n, expected):
                 assert n + 1 == expected
-        """.format(
-            strict=strict
-        )
-        testdir.makepyfile(s)
-        reprec = testdir.inline_run(SHOW_PYTEST_WARNINGS_ARG)
+        """
+        pytester.makepyfile(s)
+        reprec = pytester.inline_run()
         passed, failed = (2, 1) if strict else (3, 0)
         reprec.assertoutcome(passed=passed, failed=failed)
 
-    def test_parametrize_called_in_generate_tests(self, testdir):
+    def test_parametrize_called_in_generate_tests(self, pytester: Pytester) -> None:
         s = """
             import pytest
 
@@ -1571,13 +2145,15 @@ class TestMarkersWithParametrization(object):
             def test_increment(n, expected):
                 assert n + 1 == expected
         """
-        testdir.makepyfile(s)
-        reprec = testdir.inline_run(SHOW_PYTEST_WARNINGS_ARG)
+        pytester.makepyfile(s)
+        reprec = pytester.inline_run()
         reprec.assertoutcome(passed=2, skipped=2)
 
-    @pytest.mark.issue(290)
-    def test_parametrize_ID_generation_string_int_works(self, testdir):
-        testdir.makepyfile(
+    def test_parametrize_ID_generation_string_int_works(
+        self, pytester: Pytester
+    ) -> None:
+        """#290"""
+        pytester.makepyfile(
             """
             import pytest
 
@@ -1590,12 +2166,12 @@ class TestMarkersWithParametrization(object):
                 return
         """
         )
-        reprec = testdir.inline_run()
+        reprec = pytester.inline_run()
         reprec.assertoutcome(passed=2)
 
     @pytest.mark.parametrize("strict", [True, False])
-    def test_parametrize_marked_value(self, testdir, strict):
-        s = """
+    def test_parametrize_marked_value(self, pytester: Pytester, strict: bool) -> None:
+        s = f"""
             import pytest
 
             @pytest.mark.parametrize(("n", "expected"), [
@@ -1610,22 +2186,20 @@ class TestMarkersWithParametrization(object):
             ])
             def test_increment(n, expected):
                 assert n + 1 == expected
-        """.format(
-            strict=strict
-        )
-        testdir.makepyfile(s)
-        reprec = testdir.inline_run()
+        """
+        pytester.makepyfile(s)
+        reprec = pytester.inline_run()
         passed, failed = (0, 2) if strict else (2, 0)
         reprec.assertoutcome(passed=passed, failed=failed)
 
-    def test_pytest_make_parametrize_id(self, testdir):
-        testdir.makeconftest(
+    def test_pytest_make_parametrize_id(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
             """
             def pytest_make_parametrize_id(config, val):
                 return str(val * 2)
         """
         )
-        testdir.makepyfile(
+        pytester.makepyfile(
             """
                 import pytest
 
@@ -1634,17 +2208,17 @@ class TestMarkersWithParametrization(object):
                     pass
                 """
         )
-        result = testdir.runpytest("-v")
+        result = pytester.runpytest("-v")
         result.stdout.fnmatch_lines(["*test_func*0*PASS*", "*test_func*2*PASS*"])
 
-    def test_pytest_make_parametrize_id_with_argname(self, testdir):
-        testdir.makeconftest(
+    def test_pytest_make_parametrize_id_with_argname(self, pytester: Pytester) -> None:
+        pytester.makeconftest(
             """
             def pytest_make_parametrize_id(config, val, argname):
                 return str(val * 2 if argname == 'x' else val * 10)
         """
         )
-        testdir.makepyfile(
+        pytester.makepyfile(
             """
                 import pytest
 
@@ -1657,7 +2231,184 @@ class TestMarkersWithParametrization(object):
                     pass
                 """
         )
-        result = testdir.runpytest("-v")
+        result = pytester.runpytest("-v")
         result.stdout.fnmatch_lines(
             ["*test_func_a*0*PASS*", "*test_func_a*2*PASS*", "*test_func_b*10*PASS*"]
         )
+
+    def test_parametrize_positional_args(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            @pytest.mark.parametrize("a", [1], False)
+            def test_foo(a):
+                pass
+        """
+        )
+        result = pytester.runpytest()
+        result.assert_outcomes(passed=1)
+
+    def test_parametrize_iterator(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import itertools
+            import pytest
+
+            id_parametrize = pytest.mark.parametrize(
+                ids=("param%d" % i for i in itertools.count())
+            )
+
+            @id_parametrize('y', ['a', 'b'])
+            def test1(y):
+                pass
+
+            @id_parametrize('y', ['a', 'b'])
+            def test2(y):
+                pass
+
+            @pytest.mark.parametrize("a, b", [(1, 2), (3, 4)], ids=itertools.count())
+            def test_converted_to_str(a, b):
+                pass
+        """
+        )
+        result = pytester.runpytest("-vv", "-s")
+        result.stdout.fnmatch_lines(
+            [
+                "test_parametrize_iterator.py::test1[param0] PASSED",
+                "test_parametrize_iterator.py::test1[param1] PASSED",
+                "test_parametrize_iterator.py::test2[param0] PASSED",
+                "test_parametrize_iterator.py::test2[param1] PASSED",
+                "test_parametrize_iterator.py::test_converted_to_str[0] PASSED",
+                "test_parametrize_iterator.py::test_converted_to_str[1] PASSED",
+                "*= 6 passed in *",
+            ]
+        )
+
+
+class TestHiddenParam:
+    """Test that pytest.HIDDEN_PARAM works"""
+
+    def test_parametrize_ids(self, pytester: Pytester) -> None:
+        items = pytester.getitems(
+            """
+            import pytest
+
+            @pytest.mark.parametrize(
+                ("foo", "bar"),
+                [
+                    ("a", "x"),
+                    ("b", "y"),
+                    ("c", "z"),
+                ],
+                ids=["paramset1", pytest.HIDDEN_PARAM, "paramset3"],
+            )
+            def test_func(foo, bar):
+                pass
+        """
+        )
+        names = [item.name for item in items]
+        assert names == [
+            "test_func[paramset1]",
+            "test_func",
+            "test_func[paramset3]",
+        ]
+
+    def test_param_id(self, pytester: Pytester) -> None:
+        items = pytester.getitems(
+            """
+            import pytest
+
+            @pytest.mark.parametrize(
+                ("foo", "bar"),
+                [
+                    pytest.param("a", "x", id="paramset1"),
+                    pytest.param("b", "y", id=pytest.HIDDEN_PARAM),
+                    ("c", "z"),
+                ],
+            )
+            def test_func(foo, bar):
+                pass
+        """
+        )
+        names = [item.name for item in items]
+        assert names == [
+            "test_func[paramset1]",
+            "test_func",
+            "test_func[c-z]",
+        ]
+
+    def test_multiple_hidden_param_is_forbidden(self, pytester: Pytester) -> None:
+        pytester.makepyfile(
+            """
+            import pytest
+
+            @pytest.mark.parametrize(
+                ("foo", "bar"),
+                [
+                    ("a", "x"),
+                    ("b", "y"),
+                ],
+                ids=[pytest.HIDDEN_PARAM, pytest.HIDDEN_PARAM],
+            )
+            def test_func(foo, bar):
+                pass
+        """
+        )
+        result = pytester.runpytest("--collect-only")
+        result.stdout.fnmatch_lines(
+            [
+                "collected 0 items / 1 error",
+                "",
+                "*= ERRORS =*",
+                "*_ ERROR collecting test_multiple_hidden_param_is_forbidden.py _*",
+                "E   Failed: In test_multiple_hidden_param_is_forbidden.py::test_func: multiple instances of "
+                "HIDDEN_PARAM cannot be used in the same parametrize call, because the tests names need to be unique.",
+                "*! Interrupted: 1 error during collection !*",
+                "*= no tests collected, 1 error in *",
+            ]
+        )
+
+    def test_multiple_hidden_param_is_forbidden_idmaker(self) -> None:
+        id_maker = IdMaker(
+            ("foo", "bar"),
+            [pytest.param("a", "x"), pytest.param("b", "y")],
+            None,
+            [pytest.HIDDEN_PARAM, pytest.HIDDEN_PARAM],
+            None,
+            "some_node_id",
+        )
+        expected = "In some_node_id: multiple instances of HIDDEN_PARAM"
+        with pytest.raises(Failed, match=expected):
+            id_maker.make_unique_parameterset_ids()
+
+    def test_idmaker_error_without_nodeid(self) -> None:
+        id_maker = IdMaker(["a"], [pytest.param("a")], None, [object()], None, None)
+        with pytest.raises(Failed, match="ids contains unsupported value"):
+            id_maker.make_unique_parameterset_ids()
+
+    def test_multiple_parametrize(self, pytester: Pytester) -> None:
+        items = pytester.getitems(
+            """
+            import pytest
+
+            @pytest.mark.parametrize(
+                "bar",
+                ["x", "y"],
+            )
+            @pytest.mark.parametrize(
+                "foo",
+                ["a", "b"],
+                ids=["a", pytest.HIDDEN_PARAM],
+            )
+            def test_func(foo, bar):
+                pass
+        """
+        )
+        names = [item.name for item in items]
+        assert names == [
+            "test_func[a-x]",
+            "test_func[a-y]",
+            "test_func[x]",
+            "test_func[y]",
+        ]

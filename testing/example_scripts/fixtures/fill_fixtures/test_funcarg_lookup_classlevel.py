@@ -1,7 +1,10 @@
+# mypy: allow-untyped-defs
+from __future__ import annotations
+
 import pytest
 
 
-class TestClass(object):
+class TestClass:
     @pytest.fixture
     def something(self, request):
         return request.instance
