@@ -187,6 +187,35 @@ def getstatementrange_ast(
     if end is None:
         end = len(source.lines)
 
+    # For assertions, we want to be more precise about statement boundaries
+    # to avoid including decorators or other unrelated code
+    if assertion:
+        # Find the exact statement node that contains our line
+        target_stmt = None
+        for node in ast.walk(astnode):
+            if (isinstance(node, ast.stmt) and 
+                hasattr(node, 'lineno') and 
+                node.lineno - 1 == lineno):
+                target_stmt = node
+                break
+        
+        if target_stmt is not None:
+            # For single-line statements, use exact boundaries
+            if not hasattr(target_stmt, 'end_lineno') or target_stmt.end_lineno is None:
+                # Python < 3.8 or single line statement
+                end = start + 1
+            else:
+                # Python 3.8+ with end_lineno information
+                end = target_stmt.end_lineno
+            
+            # Ensure we don't go beyond the original end boundary
+            original_end = end
+            start, end = get_statement_startend2(lineno, astnode)
+            if target_stmt.end_lineno is not None:
+                end = min(end, target_stmt.end_lineno)
+            else:
+                end = start + 1
+
     if end > start + 1:
         # Make sure we don't span differently indented code blocks
         # by using the BlockFinder helper used which inspect.getsource() uses itself.
