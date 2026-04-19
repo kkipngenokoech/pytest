@@ -463,6 +463,16 @@ def _format_boolop(explanations, is_or):
         return explanation.replace(b"%", b"%%")
 
 
+def _is_all_or_any_call(node):
+    """Check if a node is a call to all() or any()."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("all", "any")
+        and len(node.args) == 1
+    )
+
+
 def _call_reprcompare(ops, results, expls, each_obj):
     for i, res, expl in zip(range(len(ops)), results, expls):
         try:
@@ -740,6 +750,122 @@ class AssertionRewriter(ast.NodeVisitor):
         res = self.assign(node)
         return res, self.explanation_param(self.display(res))
 
+    def _rewrite_all_any(self, node, func_name):
+        """Rewrite all() or any() calls to provide better error messages."""
+        if not _is_all_or_any_call(node):
+            return None
+            
+        # Get the iterable argument
+        iterable = node.args[0]
+        
+        # Create unique variable names
+        iter_var = self.variable()
+        item_var = self.variable()
+        
+        # Store the iterable in a variable
+        iter_assign = ast.Assign(
+            [ast.Name(iter_var, ast.Store())],
+            iterable
+        )
+        self.statements.append(iter_assign)
+        
+        if func_name == "all":
+            # For all(): check each item, fail on first False
+            # for item in iterable:
+            #     if not item:
+            #         assert False, f"all() failed at item: {item!r}"
+            # return True
+            
+            loop_body = [
+                ast.If(
+                    ast.UnaryOp(ast.Not(), ast.Name(item_var, ast.Load())),
+                    [
+                        ast.Assign(
+                            [ast.Name("@py_format0", ast.Store())],
+                            self.helper("_saferepr", ast.Name(item_var, ast.Load()))
+                        ),
+                        ast.Raise(
+                            ast.Call(
+                                ast.Name("AssertionError", ast.Load()),
+                                [ast.BinOp(
+                                    ast.Str("all() failed at item: "),
+                                    ast.Add(),
+                                    ast.Name("@py_format0", ast.Load())
+                                )],
+                                []
+                            ),
+                            None
+                        )
+                    ],
+                    []
+                )
+            ]
+        else:  # any()
+            # For any(): check each item, succeed on first True, fail if none True
+            # found_true = False
+            # for item in iterable:
+            #     if item:
+            #         found_true = True
+            #         break
+            # if not found_true:
+            #     assert False, "any() failed: no true items found"
+            
+            found_var = self.variable()
+            
+            # Initialize found_true = False
+            found_assign = ast.Assign(
+                [ast.Name(found_var, ast.Store())],
+                _NameConstant(False)
+            )
+            self.statements.append(found_assign)
+            
+            loop_body = [
+                ast.If(
+                    ast.Name(item_var, ast.Load()),
+                    [
+                        ast.Assign(
+                            [ast.Name(found_var, ast.Store())],
+                            _NameConstant(True)
+                        ),
+                        ast.Break()
+                    ],
+                    []
+                )
+            ]
+        
+        # Create the for loop
+        for_loop = ast.For(
+            ast.Name(item_var, ast.Store()),
+            ast.Name(iter_var, ast.Load()),
+            loop_body,
+            []
+        )
+        self.statements.append(for_loop)
+        
+        if func_name == "any":
+            # Add the final check for any()
+            final_check = ast.If(
+                ast.UnaryOp(ast.Not(), ast.Name(found_var, ast.Load())),
+                [
+                    ast.Raise(
+                        ast.Call(
+                            ast.Name("AssertionError", ast.Load()),
+                            [ast.Str("any() failed: no true items found")],
+                            []
+                        ),
+                        None
+                    )
+                ],
+                []
+            )
+            self.statements.append(final_check)
+            
+        # Return True if we get here (for all()) or found_var (for any())
+        if func_name == "all":
+            return _NameConstant(True)
+        else:
+            return ast.Name(found_var, ast.Load())
+
     def visit_Assert(self, assert_):
         """Return the AST statements to replace the ast.Assert instance.
 
@@ -768,8 +894,18 @@ class AssertionRewriter(ast.NodeVisitor):
         self.stack = []
         self.on_failure = []
         self.push_format_context()
-        # Rewrite assert into a bunch of statements.
-        top_condition, explanation = self.visit(assert_.test)
+        # Check if this is an all() or any() call and rewrite it
+        if _is_all_or_any_call(assert_.test):
+            func_name = assert_.test.func.id
+            rewritten = self._rewrite_all_any(assert_.test, func_name)
+            if rewritten is not None:
+                top_condition = rewritten
+                explanation = f"{func_name}() assertion"
+            else:
+                top_condition, explanation = self.visit(assert_.test)
+        else:
+            # Rewrite assert into a bunch of statements.
+            top_condition, explanation = self.visit(assert_.test)
         # If in a test module, check if directly asserting None, in order to warn [Issue #3191]
         if self.module_path is not None:
             self.statements.append(
