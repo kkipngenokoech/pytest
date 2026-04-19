@@ -1,12 +1,13 @@
 # run this with $ pytest --collect-only test_collectonly.py
 #
+from __future__ import annotations
 
 
 def test_function():
     pass
 
 
-class TestClass(object):
+class TestClass:
     def test_method(self):
         pass
 

@@ -18,14 +18,14 @@ example: specifying and selecting acceptance tests
         return AcceptFixture(request)
 
 
-    class AcceptFixture(object):
+    class AcceptFixture:
         def __init__(self, request):
             if not request.config.getoption("acceptance"):
                 pytest.skip("specify -A to run acceptance tests")
             self.tmpdir = request.config.mktemp(request.function.__name__, numbered=True)
 
         def run(self, *cmd):
-            """ called by test code to execute an acceptance test. """
+            """called by test code to execute an acceptance test."""
             self.tmpdir.chdir()
             return subprocess.check_output(cmd).decode()
 
@@ -65,7 +65,7 @@ extend the `accept example`_ by putting this in our test module:
         return arg
 
 
-    class TestSpecialAcceptance(object):
+    class TestSpecialAcceptance:
         def test_sometest(self, accept):
             assert accept.tmpdir.join("special").check()
 
@@ -75,7 +75,7 @@ decorate its result.  This mechanism allows us to stay
 ignorant of how/where the function argument is provided -
 in our example from a `conftest plugin`_.
 
-sidenote: the temporary directory used here are instances of
+Side note: the temporary directories used here are instances of
 the `py.path.local`_ class which provides many of the os.path
 methods in a convenient way.
 

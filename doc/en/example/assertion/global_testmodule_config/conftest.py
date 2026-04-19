@@ -1,8 +1,11 @@
-import py
+from __future__ import annotations
+
+import os.path
 
 import pytest
 
-mydir = py.path.local(__file__).dirpath()
+
+mydir = os.path.dirname(__file__)
 
 
 def pytest_runtest_setup(item):
@@ -11,4 +14,4 @@ def pytest_runtest_setup(item):
             return
         mod = item.getparent(pytest.Module).obj
         if hasattr(mod, "hello"):
-            print("mod.hello {!r}".format(mod.hello))
+            print(f"mod.hello {mod.hello!r}")
