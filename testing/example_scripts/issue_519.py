@@ -1,4 +1,6 @@
 import pprint
+from typing import List
+from typing import Tuple
 
 import pytest
 
@@ -13,17 +15,17 @@ def pytest_generate_tests(metafunc):
 
 @pytest.fixture(scope="session")
 def checked_order():
-    order = []
+    order: List[Tuple[str, str, str]] = []
 
     yield order
     pprint.pprint(order)
     assert order == [
-        ("testing/example_scripts/issue_519.py", "fix1", "arg1v1"),
+        ("issue_519.py", "fix1", "arg1v1"),
         ("test_one[arg1v1-arg2v1]", "fix2", "arg2v1"),
         ("test_two[arg1v1-arg2v1]", "fix2", "arg2v1"),
         ("test_one[arg1v1-arg2v2]", "fix2", "arg2v2"),
         ("test_two[arg1v1-arg2v2]", "fix2", "arg2v2"),
-        ("testing/example_scripts/issue_519.py", "fix1", "arg1v2"),
+        ("issue_519.py", "fix1", "arg1v2"),
         ("test_one[arg1v2-arg2v1]", "fix2", "arg2v1"),
         ("test_two[arg1v2-arg2v1]", "fix2", "arg2v1"),
         ("test_one[arg1v2-arg2v2]", "fix2", "arg2v2"),
@@ -31,13 +33,13 @@ def checked_order():
     ]
 
 
-@pytest.yield_fixture(scope="module")
+@pytest.fixture(scope="module")
 def fix1(request, arg1, checked_order):
     checked_order.append((request.node.name, "fix1", arg1))
     yield "fix1-" + arg1
 
 
-@pytest.yield_fixture(scope="function")
+@pytest.fixture(scope="function")
 def fix2(request, fix1, arg2, checked_order):
     checked_order.append((request.node.name, "fix2", arg2))
     yield "fix2-" + arg2 + fix1
