@@ -16,7 +16,6 @@ import _pytest._code
 import pytest
 from _pytest._code import Source
 
-astonly = pytest.mark.nothing
 failsonjython = pytest.mark.xfail("sys.platform.startswith('java')")
 
 
@@ -227,7 +226,6 @@ class TestSourceParsingAndCompiling(object):
         s = source.getstatement(1)
         assert s == str(source)
 
-    @astonly
     def test_getstatementrange_within_constructs(self):
         source = Source(
             """\
@@ -312,7 +310,7 @@ class TestSourceParsingAndCompiling(object):
 
     def test_compile_and_getsource(self):
         co = self.source.compile()
-        six.exec_(co, globals())
+        exec(co, globals())
         f(7)
         excinfo = pytest.raises(AssertionError, f, 6)
         frame = excinfo.traceback[-1].frame
@@ -376,7 +374,7 @@ def test_getfuncsource_dynamic():
         def g(): pass
     """
     co = _pytest._code.compile(source)
-    six.exec_(co, globals())
+    exec(co, globals())
     assert str(_pytest._code.Source(f)).strip() == "def f():\n    raise ValueError"
     assert str(_pytest._code.Source(g)).strip() == "def g(): pass"
 
@@ -630,7 +628,6 @@ x = 3
 
 
 class TestTry(object):
-    pytestmark = astonly
     source = """\
 try:
     raise ValueError
@@ -675,7 +672,6 @@ finally:
 
 
 class TestIf(object):
-    pytestmark = astonly
     source = """\
 if 1:
     y = 3

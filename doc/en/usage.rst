@@ -231,9 +231,9 @@ Example:
     XFAIL test_example.py::test_xfail
       reason: xfailing this test
     XPASS test_example.py::test_xpass always xfail
-    ERROR test_example.py::test_error
-    FAILED test_example.py::test_fail
-     1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12 seconds
+    ERROR test_example.py::test_error - assert 0
+    FAILED test_example.py::test_fail - assert 0
+    = 1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12 seconds =
 
 The ``-r`` options accepts a number of characters after it, with ``a`` used
 above meaning "all except passes".
@@ -281,9 +281,9 @@ More than one character can be used, so for example to only see failed and skipp
 
     test_example.py:14: AssertionError
     ========================= short test summary info ==========================
-    FAILED test_example.py::test_fail
+    FAILED test_example.py::test_fail - assert 0
     SKIPPED [1] $REGENDOC_TMPDIR/test_example.py:23: skipping this test
-     1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12 seconds
+    = 1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12 seconds =
 
 Using ``p`` lists the passing tests, whilst ``P`` adds an extra section "PASSES" with those tests that passed but had
 captured output:
@@ -316,13 +316,13 @@ captured output:
     E       assert 0
 
     test_example.py:14: AssertionError
-    ========================= short test summary info ==========================
-    PASSED test_example.py::test_ok
     ================================== PASSES ==================================
     _________________________________ test_ok __________________________________
     --------------------------- Captured stdout call ---------------------------
     ok
-     1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12 seconds
+    ========================= short test summary info ==========================
+    PASSED test_example.py::test_ok
+    = 1 failed, 1 passed, 1 skipped, 1 xfailed, 1 xpassed, 1 error in 0.12 seconds =
 
 .. _pdb-option:
 
@@ -458,13 +458,6 @@ instead, configure the ``junit_duration_report`` option like this:
 record_property
 ^^^^^^^^^^^^^^^
 
-
-
-
-   Fixture renamed from ``record_xml_property`` to ``record_property`` as user
-   properties are now available to all reporters.
-   ``record_xml_property`` is now deprecated.
-
 If you want to log additional information for a test, you can use the
 ``record_property`` fixture:
 
@@ -522,9 +515,7 @@ Will result in:
 
 .. warning::
 
-    ``record_property`` is an experimental feature and may change in the future.
-
-    Also please note that using this feature will break any schema verification.
+    Please note that using this feature will break schema verifications for the latest JUnitXML schema.
     This might be a problem when used with some CI servers.
 
 record_xml_attribute
@@ -587,43 +578,45 @@ Instead, this will add an attribute ``assertions="REQ-1234"`` inside the generat
             </xs:complexType>
         </xs:element>
 
-LogXML: add_global_property
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. warning::
 
+    Please note that using this feature will break schema verifications for the latest JUnitXML schema.
+    This might be a problem when used with some CI servers.
 
+.. _record_testsuite_property example:
 
-If you want to add a properties node in the testsuite level, which may contains properties that are relevant
-to all testcases you can use ``LogXML.add_global_properties``
+record_testsuite_property
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. versionadded:: 4.5
+
+If you want to add a properties node at the test-suite level, which may contains properties
+that are relevant to all tests, you can use the ``record_testsuite_property`` session-scoped fixture:
+
+The ``record_testsuite_property`` session-scoped fixture can be used to add properties relevant
+to all tests.
 
 .. code-block:: python
 
     import pytest
 
 
-    @pytest.fixture(scope="session")
-    def log_global_env_facts(f):
-
-        if pytest.config.pluginmanager.hasplugin("junitxml"):
-            my_junit = getattr(pytest.config, "_xml", None)
-
-        my_junit.add_global_property("ARCH", "PPC")
-        my_junit.add_global_property("STORAGE_TYPE", "CEPH")
-
-
-    @pytest.mark.usefixtures(log_global_env_facts.__name__)
-    def start_and_prepare_env():
-        pass
+    @pytest.fixture(scope="session", autouse=True)
+    def log_global_env_facts(record_testsuite_property):
+        record_testsuite_property("ARCH", "PPC")
+        record_testsuite_property("STORAGE_TYPE", "CEPH")
 
 
     class TestMe(object):
         def test_foo(self):
             assert True
 
-This will add a property node below the testsuite node to the generated xml:
+The fixture is a callable which receives ``name`` and ``value`` of a ``<property>`` tag
+added at the test-suite level of the generated xml:
 
 .. code-block:: xml
 
-    <testsuite errors="0" failures="0" name="pytest" skips="0" tests="1" time="0.006">
+    <testsuite errors="0" failures="0" name="pytest" skipped="0" tests="1" time="0.006">
       <properties>
         <property name="ARCH" value="PPC"/>
         <property name="STORAGE_TYPE" value="CEPH"/>
@@ -631,11 +624,11 @@ This will add a property node below the testsuite node to the generated xml:
       <testcase classname="test_me.TestMe" file="test_me.py" line="16" name="test_foo" time="0.000243663787842"/>
     </testsuite>
 
-.. warning::
+``name`` must be a string, ``value`` will be converted to a string and properly xml-escaped.
 
-    This is an experimental feature, and its interface might be replaced
-    by something more powerful and general in future versions. The
-    functionality per-se will be kept.
+The generated XML is compatible with the latest ``xunit`` standard, contrary to `record_property`_
+and `record_xml_attribute`_.
+
 
 Creating resultlog format files
 ----------------------------------------------------
