@@ -424,6 +424,14 @@ record_property
 
 .. autofunction:: _pytest.junitxml.record_property()
 
+
+record_testsuite_property
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+**Tutorial**: :ref:`record_testsuite_property example`.
+
+.. autofunction:: _pytest.junitxml.record_testsuite_property()
+
 caplog
 ~~~~~~
 
@@ -572,6 +580,8 @@ Bootstrapping hooks called for plugins registered early enough (internal and set
 .. autofunction:: pytest_cmdline_preparse
 .. autofunction:: pytest_cmdline_parse
 .. autofunction:: pytest_cmdline_main
+
+.. _`initialization-hooks`:
 
 Initialization hooks
 ~~~~~~~~~~~~~~~~~~~~
@@ -1261,15 +1271,17 @@ passed multiple times. The expected format is ``name=value``. For example::
 
 .. confval:: markers
 
-    When the ``--strict`` command-line argument is used, only known markers -
-    defined in code by core pytest or some plugin - are allowed.
-    You can list additional markers in this setting to add them to the whitelist.
+    When the ``--strict-markers`` or ``--strict`` command-line arguments are used,
+    only known markers - defined in code by core pytest or some plugin - are allowed.
 
-    You can list one marker name per line, indented from the option name.
+    You can list additional markers in this setting to add them to the whitelist,
+    in which case you probably want to add ``--strict-markers`` to ``addopts``
+    to avoid future regressions:
 
     .. code-block:: ini
 
         [pytest]
+        addopts = --strict-markers
         markers =
             slow
             serial
