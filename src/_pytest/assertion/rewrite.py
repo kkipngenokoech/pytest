@@ -298,7 +298,7 @@ class AssertionRewritingHook(object):
             mod.__loader__ = self
             # Normally, this attribute is 3.4+
             mod.__spec__ = spec_from_file_location(name, co.co_filename, loader=self)
-            six.exec_(co, mod.__dict__)
+            exec(co, mod.__dict__)
         except:  # noqa
             if name in sys.modules:
                 del sys.modules[name]
@@ -877,6 +877,120 @@ class AssertionRewriter(ast.NodeVisitor):
         for stmt in self.statements:
             set_location(stmt, assert_.lineno, assert_.col_offset)
         return self.statements
+    
+    def _try_unroll_all_any(self, assert_):
+        """Try to unroll all() or any() calls for better error reporting.
+        
+        Returns a list of statements if unrolling is possible, None otherwise.
+        """
+        if not isinstance(assert_.test, ast.Call):
+            return None
+            
+        call = assert_.test
+        if not isinstance(call.func, ast.Name):
+            return None
+            
+        func_name = call.func.id
+        if func_name not in ('all', 'any') or len(call.args) != 1:
+            return None
+            
+        iterable_arg = call.args[0]
+        
+        # Generate unique variable names
+        counter_suffix = next(self._unroll_counter)
+        iter_var = "@py_iter_%d" % counter_suffix
+        item_var = "@py_item_%d" % counter_suffix
+        
+        statements = []
+        
+        # Create the iterator variable: @py_iter_N = iter(iterable)
+        iter_assign = ast.Assign(
+            targets=[ast.Name(iter_var, ast.Store())],
+            value=ast_Call(
+                ast.Name("iter", ast.Load()),
+                [iterable_arg],
+                []
+            )
+        )
+        statements.append(iter_assign)
+        
+        if func_name == 'all':
+            # For all(): iterate and assert each item is truthy
+            # for @py_item_N in @py_iter_N:
+            #     assert @py_item_N
+            loop_body = [
+                ast.Assert(
+                    test=ast.Name(item_var, ast.Load()),
+                    msg=None
+                )
+            ]
+        else:  # any()
+            # For any(): iterate and if any item is truthy, we're done
+            # Otherwise assert False at the end
+            # @py_found_N = False
+            # for @py_item_N in @py_iter_N:
+            #     if @py_item_N:
+            #         @py_found_N = True
+            #         break
+            # assert @py_found_N
+            found_var = "@py_found_%d" % counter_suffix
+            
+            # @py_found_N = False
+            found_assign = ast.Assign(
+                targets=[ast.Name(found_var, ast.Store())],
+                value=ast.NameConstant(False)
+            )
+            statements.append(found_assign)
+            
+            # if @py_item_N: @py_found_N = True; break
+            loop_body = [
+                ast.If(
+                    test=ast.Name(item_var, ast.Load()),
+                    body=[
+                        ast.Assign(
+                            targets=[ast.Name(found_var, ast.Store())],
+                            value=ast.NameConstant(True)
+                        ),
+                        ast.Break()
+                    ],
+                    orelse=[]
+                )
+            ]
+        
+        # Create the for loop
+        for_loop = ast.For(
+            target=ast.Name(item_var, ast.Store()),
+            iter=ast.Name(iter_var, ast.Load()),
+            body=loop_body,
+            orelse=[]
+        )
+        statements.append(for_loop)
+        
+        if func_name == 'any':
+            # Add final assertion for any()
+            final_assert = ast.Assert(
+                test=ast.Name(found_var, ast.Load()),
+                msg=None
+            )
+            statements.append(final_assert)
+        
+        # Now rewrite all the generated assert statements
+        rewritten_statements = []
+        for stmt in statements:
+            if isinstance(stmt, ast.Assert):
+                # Recursively rewrite the assert (but avoid infinite recursion)
+                old_unroll_counter = self._unroll_counter
+                try:
+                    # Temporarily disable unrolling to avoid recursion
+                    self._unroll_counter = None
+                    rewritten = self.visit_Assert(stmt)
+                    rewritten_statements.extend(rewritten)
+                finally:
+                    self._unroll_counter = old_unroll_counter
+            else:
+                rewritten_statements.append(stmt)
+        
+        return rewritten_statements
 
     def warn_about_none_ast(self, node, module_path, lineno):
         """

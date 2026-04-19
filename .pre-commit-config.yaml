@@ -1,6 +1,6 @@
 exclude: doc/en/example/py2py3/test_py2.py
 repos:
--   repo: https://github.com/ambv/black
+-   repo: https://github.com/python/black
     rev: 19.3b0
     hooks:
     -   id: black
@@ -45,7 +45,7 @@ repos:
     -   id: rst
         name: rst
         entry: rst-lint --encoding utf-8
-        files: ^(CHANGELOG.rst|HOWTORELEASE.rst|README.rst|changelog/.*)$
+        files: ^(CHANGELOG.rst|HOWTORELEASE.rst|README.rst|TIDELIFT.rst|changelog/.*)$
         language: python
         additional_dependencies: [pygments, restructuredtext_lint]
     -   id: changelogs-rst
